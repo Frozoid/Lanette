@@ -175,6 +175,12 @@ export class OneVsOne extends ScriptedGame {
 		this.resetModchatAndRanks();
 		this.updateLastChallengeTime();
 	}
+	onForceEnd(user?: User): void {
+		this.resetModchatAndRanks();
+		if (user && this.challenger && user.id === this.challenger.id) {
+			this.updateLastChallengeTime();
+		}
+	}
 		}
 
 export const game: IGameFile<OneVsOne> = {
