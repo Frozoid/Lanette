@@ -4,10 +4,12 @@ import type { UserHostedGame } from "../room-game-user-hosted";
 import type { Room } from "../rooms";
 import type { BaseCommandDefinitions } from "../types/command-parser";
 import type { GameDifficulty } from "../types/games";
-import type { IUserHostedGameStats, UserHostStatus } from "../types/storage";
+import type { IGameStat, UserHostStatus } from "../types/storage";
 import type { User } from "../users";
 
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types */
+const HANGMAN_ANSWER_MAX_LENGTH = 30;
+const HANGMAN_WORDS_MAX_LENGTH = 20;
+const HANGMAN_HINT_MAX_LENGTH = 150;
 
 export const commands: BaseCommandDefinitions = {
 	pastuserhostedgames: {
@@ -110,7 +112,11 @@ export const commands: BaseCommandDefinitions = {
 
 			const format = Games.getUserHostedFormat(targets.join(","), user);
 			if (Array.isArray(format)) return this.sayError(format);
-			if (Games.reloadInProgress) return this.sayError(['reloadInProgress']);
+			if (Games.isReloadInProgress()) return this.sayError(['reloadInProgress']);
+
+			if (format.approvedHostOnly && !approvedHost && !user.hasRank(room, 'voice')) {
+				return this.say(format.name + " can only be hosted by approved hosts or room auth.");
+			}
 
 			if (!approvedHost && database.userHostStatuses && host.id in database.userHostStatuses) {
 				if (database.userHostStatuses[host.id] === 'unapproved') {
@@ -136,26 +142,18 @@ export const commands: BaseCommandDefinitions = {
 				}
 			}
 
-			if (Config.userHostCooldownTimers && room.id in Config.userHostCooldownTimers && room.id in Games.lastUserHostTimes &&
-				host.id in Games.lastUserHostTimes[room.id]) {
-				const userHostCooldown = (Config.userHostCooldownTimers[room.id] * 60 * 1000) -
-					(Date.now() - Games.lastUserHostTimes[room.id][host.id]);
-				if (userHostCooldown > 1000) {
-					const durationString = Tools.toDurationString(userHostCooldown);
-					return this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of " +
-						host.name + "'s host cooldown remaining.");
-				}
+			const userHostCooldown = Games.getRemainingUserHostCooldown(room, host.id);
+			if (userHostCooldown > 1000) {
+				const durationString = Tools.toDurationString(userHostCooldown);
+				return this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of " +
+					host.name + "'s host cooldown remaining.");
 			}
 
-			if (Config.userHostFormatCooldownTimers && room.id in Config.userHostFormatCooldownTimers &&
-				room.id in Games.lastUserHostFormatTimes && format.id in Games.lastUserHostFormatTimes[room.id]) {
-				const formatCooldown = (Config.userHostFormatCooldownTimers[room.id] * 60 * 1000) -
-					(Date.now() - Games.lastUserHostFormatTimes[room.id][format.id]);
-				if (formatCooldown > 1000) {
-					const durationString = Tools.toDurationString(formatCooldown);
-					return this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of the " +
-						format.name + " user-host cooldown remaining.");
-				}
+			const formatCooldown = Games.getRemainingUserHostFormatCooldown(room, format.id);
+			if (formatCooldown > 1000) {
+				const durationString = Tools.toDurationString(formatCooldown);
+				return this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of the " +
+					format.name + " user-host cooldown remaining.");
 			}
 
 			if (Config.maxQueuedUserHostedGames && room.id in Config.maxQueuedUserHostedGames && database.userHostedGameQueue &&
@@ -168,40 +166,54 @@ export const commands: BaseCommandDefinitions = {
 			const inCooldown = remainingGameCooldown > 1000;
 			const requiresScriptedGame = Games.requiresScriptedGame(room);
 			if (room.game || room.userHostedGame || otherUsersQueued || inCooldown || requiresScriptedGame) {
+				if (room.game && room.game.format.id === format.id &&
+					(!database.userHostedGameQueue || !database.userHostedGameQueue.length)) {
+					return this.say("Scripted " + format.name + " is currently being played. " + host.name + " please choose a " +
+						"different game!");
+				}
+
 				if (database.userHostedGameQueue) {
+					let alreadyQueued = '';
 					for (const game of database.userHostedGameQueue) {
-						const alreadyQueued = Games.getExistingUserHostedFormat(game.format).name === format.name;
+						if (Games.getExistingUserHostedFormat(game.format).name === format.name) {
+							alreadyQueued = game.id;
+							break;
+						}
+					}
+
+					if (alreadyQueued && alreadyQueued !== host.id) {
+						return this.say("Another host is already queued for " + format.name + ". " + host.name + " please " +
+							"choose a different game!");
+					}
+
+					for (const game of database.userHostedGameQueue) {
 						if (game.id === host.id) {
 							if (alreadyQueued && !format.inputTarget.includes(',')) {
-								return this.say(host.name + " is already in the host queue for " + format.name + ".");
+								return this.say(host.name + " is already queued for " + format.name + ".");
 							}
 							game.format = format.inputTarget;
 							return this.say(host.name + "'s game was changed to " + format.name + ".");
-						} else {
-							if (alreadyQueued) {
-								return this.say("Another host is currently queued for " + format.name + ". " + host.name + " please " +
-									"choose a different game!");
-							}
 						}
 					}
 				} else {
 					database.userHostedGameQueue = [];
 				}
 
-				let reason = '';
+				let prefixText = '';
+				let suffixText = '';
 				if (!room.game && !room.userHostedGame) {
 					if (otherUsersQueued) {
-						reason = (database.userHostedGameQueue.length === 1 ? "Another host is" : database.userHostedGameQueue.length +
-							" other hosts are") + " currently queued";
-					} else if (inCooldown) {
-						const durationString = Tools.toDurationString(remainingGameCooldown);
-						reason = "There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of the game " +
-							"cooldown remaining";
+						prefixText = (database.userHostedGameQueue.length === 1 ? "Another host is" : database.userHostedGameQueue.length +
+							" other hosts are") + " already queued";
 					} else if (requiresScriptedGame) {
-						reason = "At least 1 scripted game needs to be played before the next user-hosted game can start";
+						prefixText = "At least 1 scripted game needs to be played before the next user-hosted game can start";
+					} else if (inCooldown) {
+						suffixText = "Their game can begin in " + Tools.toDurationString(remainingGameCooldown) + "!";
 					}
 				}
-				this.say((reason ? reason + " so " : "") + host.name + " was added to the host queue.");
+
+				this.say((prefixText ? prefixText + " so " : "") + host.name + " was added to the host queue." +
+					(suffixText ? " " + suffixText : ""));
 				database.userHostedGameQueue.push({
 					format: format.inputTarget,
 					id: host.id,
@@ -210,8 +222,41 @@ export const commands: BaseCommandDefinitions = {
 				Storage.exportDatabase(room.id);
 				return;
 			}
+
+			if (Config.disallowCreatingPreviousScriptedGame && Config.disallowCreatingPreviousScriptedGame.includes(room.id)) {
+				if (database.pastGames && database.pastGames.length) {
+					const pastFormat = Games.getFormat(database.pastGames[0].inputTarget);
+					const id = Array.isArray(pastFormat) ? Tools.toId(database.pastGames[0].name) : pastFormat.id;
+					if (id === format.id) {
+						return this.say(format.name + " was the last scripted game. " + host.name + " please choose a " +
+						"different game!");
+					}
+				}
+			}
+
 			const game = Games.createUserHostedGame(room, format, host);
 			game.signups();
+		},
+	},
+	restarthost: {
+		command(target, room, user) {
+			if (this.isPm(room) || !user.hasRank(room, 'voice') || !room.userHostedGame) return;
+			let format = room.userHostedGame.format;
+			if (target) {
+				const newFormat = Games.getUserHostedFormat(target);
+				if (Array.isArray(newFormat)) return this.sayError(newFormat);
+				format = newFormat;
+			}
+
+			room.userHostedGame.restart(format);
+		},
+	},
+	extendhost: {
+		command(target, room, user) {
+			if (this.isPm(room) || !user.hasRank(room, 'voice') || !room.userHostedGame) return;
+
+			const error = room.userHostedGame.extend(target, user);
+			if (error) this.say(error);
 		},
 	},
 	subhost: {
@@ -250,7 +295,7 @@ export const commands: BaseCommandDefinitions = {
 			const nextHost = database.userHostedGameQueue[0];
 			const format = Games.getUserHostedFormat(nextHost.format, user);
 			if (Array.isArray(format)) return this.sayError(format);
-			if (Games.reloadInProgress) return this.sayError(['reloadInProgress']);
+			if (Games.isReloadInProgress()) return this.sayError(['reloadInProgress']);
 			database.userHostedGameQueue.shift();
 			const game = Games.createUserHostedGame(room, format, nextHost.name);
 			game.signups();
@@ -287,19 +332,13 @@ export const commands: BaseCommandDefinitions = {
 			if (!this.isPm(room)) return;
 			const targetRoom = Rooms.search(target);
 			if (!targetRoom) return this.sayError(['invalidBotRoom', target]);
-			if (Config.userHostCooldownTimers && targetRoom.id in Config.userHostCooldownTimers &&
-				targetRoom.id in Games.lastUserHostTimes && user.id in Games.lastUserHostTimes[targetRoom.id]) {
-				const userHostCooldown = (Config.userHostCooldownTimers[targetRoom.id] * 60 * 1000) -
-					(Date.now() - Games.lastUserHostTimes[targetRoom.id][user.id]);
-				if (userHostCooldown > 1000) {
-					const durationString = Tools.toDurationString(userHostCooldown);
-					this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of your host " +
-						"cooldown remaining.");
-				} else {
-					this.say("Your host cooldown has ended.");
-				}
+			const userHostCooldown = Games.getRemainingUserHostCooldown(targetRoom, user.id);
+			if (userHostCooldown > 1000) {
+				const durationString = Tools.toDurationString(userHostCooldown);
+				this.say("There " + (durationString.endsWith('s') ? "are" : "is") + " still " + durationString + " of your host " +
+					"cooldown remaining.");
 			} else {
-				this.say("You do not have a host cooldown.");
+				this.say("Your host cooldown has ended.");
 			}
 		},
 		aliases: ['ht'],
@@ -453,7 +492,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			let html = "<b>" + hostName + "'s cycle host stats</b>:<br />";
-			const stats: Dict<IUserHostedGameStats[]> = {};
+			const stats: Dict<IGameStat[]> = {};
 			for (const game of database.userHostedGameStats[hostId]) {
 				const date = new Date(game.startTime);
 				const key = (date.getMonth() + 1) + '/' + date.getDate();
@@ -467,7 +506,7 @@ export const commands: BaseCommandDefinitions = {
 				for (const stat of stats[day]) {
 					const format = Games.getUserHostedFormat(stat.inputTarget);
 					const name = Array.isArray(format) ? stat.format : format.name;
-					dayStats.push("<b>" + name + "</b>: " + stat.playerCount + " players; " +
+					dayStats.push("<b>" + name + "</b>: " + stat.startingPlayerCount + " players; " +
 						Tools.toDurationString(stat.endTime - stat.startTime));
 				}
 				dayHtml += dayStats.join("<br />") + "</details>";
@@ -571,10 +610,18 @@ export const commands: BaseCommandDefinitions = {
 
 			if (room.userHostedGame.gameTimer) clearTimeout(room.userHostedGame.gameTimer);
 			room.userHostedGame.gameTimer = setTimeout(() => {
-				if (user.id === room.userHostedGame!.hostId) room.say(room.userHostedGame!.hostName + ": time is up!");
 				room.userHostedGame!.gameTimer = null;
+				room.userHostedGame!.gameTimerEndTime = 0;
+
+				if (user.id === room.userHostedGame!.hostId || user.id === room.userHostedGame!.subHostId) {
+					room.say(room.userHostedGame!.hostName + ": time is up!");
+					room.userHostedGame!.autoRefreshControlPanel();
+				}
 			}, time);
 			this.say("Game timer set for: " + Tools.toDurationString(time) + ".");
+
+			room.userHostedGame.gameTimerEndTime = time + Date.now();
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['gtimer', 'randomgametimer', 'randomgtimer', 'randgametimer', 'randgtimer'],
 	},
@@ -585,7 +632,7 @@ export const commands: BaseCommandDefinitions = {
 			if (id === 'off' || id === 'end' || id === 'stop') {
 				if (!room.userHostedGame.startTimer) return this.say("There is no game start timer set.");
 				clearTimeout(room.userHostedGame.startTimer);
-				delete room.userHostedGame.startTimer;
+				room.userHostedGame.startTimer = null;
 				return this.say("The game start timer has been turned off.");
 			}
 
@@ -652,6 +699,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			this.say("Added " + Tools.joinList(targetUsers.map(x => x.name)) + " to the player list.");
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['apl', 'addplayers'],
 	},
@@ -675,6 +723,7 @@ export const commands: BaseCommandDefinitions = {
 			// @ts-expect-error
 			if (room.userHostedGame.started) room.userHostedGame.round++;
 			if (cmd !== 'silentelim' && cmd !== 'selim' && cmd !== 'srpl') this.run('players');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['removeplayers', 'srpl', 'rpl', 'silentelim', 'selim', 'elim', 'eliminate', 'eliminateplayer', 'eliminateplayers'],
 	},
@@ -719,6 +768,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			this.say("Added " + Tools.joinList(targetUsers.map(x => x.name)) + " to Team " + team.name + ".");
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['atpl', 'addteamplayers'],
 	},
@@ -739,6 +789,7 @@ export const commands: BaseCommandDefinitions = {
 				room.userHostedGame.players = temp;
 			}
 			this.run('playerlist');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['shufflepl'],
 	},
@@ -776,6 +827,7 @@ export const commands: BaseCommandDefinitions = {
 
 			room.userHostedGame.splitPlayers(teams, teamNames);
 			this.run('playerlist');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['splitpl'],
 	},
@@ -786,6 +838,7 @@ export const commands: BaseCommandDefinitions = {
 
 			room.userHostedGame.unSplitPlayers();
 			this.run('playerlist');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['unsplitpl'],
 	},
@@ -816,6 +869,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 			if (!users.length) return this.say("The player list is empty.");
 			this.run('removeplayer', users.join(", "));
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['clearplayers', 'clearpl'],
 	},
@@ -846,6 +900,7 @@ export const commands: BaseCommandDefinitions = {
 					points = Math.round(parseInt(id));
 					if (points < 1) points = 1;
 				} else {
+					if (!Tools.isUsernameLength(id)) return this.say("'" + name.trim() + "' is not a valid username.");
 					if (id in room.userHostedGame.players && room.userHostedGame.savedWinners.includes(room.userHostedGame.players[id])) {
 						savedWinners.push(room.userHostedGame.players[id].name);
 						continue;
@@ -882,7 +937,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			if (teamNames.length) {
-				this.run('addteampoint', target);
+				this.run(cmd.startsWith('r') ? 'removeteampoint' : 'addteampoint', target);
 				return;
 			}
 
@@ -914,6 +969,8 @@ export const commands: BaseCommandDefinitions = {
 				user.say((reachedCap.length === 1 ? "A " + reached + " has" : reachedCap + " " + reached + "s have") + " reached the " +
 					"score cap in your game.");
 			}
+
+			if (!this.runningMultipleTargets) room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['addgamepoint', 'removegamepoints', 'removegamepoint'],
 	},
@@ -951,8 +1008,11 @@ export const commands: BaseCommandDefinitions = {
 				this.run(newCmd, player.name + (pointsString ? ', ' + pointsString : ''));
 				if (expiredUser) Users.remove(playerUser);
 			}
+
 			this.runningMultipleTargets = false;
 			this.run('playerlist');
+
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['aptall', 'rptall', 'removepointall', 'clearpointall', 'clearptall'],
 	},
@@ -977,8 +1037,11 @@ export const commands: BaseCommandDefinitions = {
 			if (!remainingPlayers.length) {
 				return this.say("Team " + room.userHostedGame.teams[teamId].name + " does not have any players remaining.");
 			}
+
 			const player = room.userHostedGame.sampleOne(remainingPlayers);
-			this.run(cmd.startsWith('r') ? 'removepoint' : 'addpoint', player.name + ',' + points);
+			this.run(cmd.startsWith('r') ? 'removegamepoint' : 'addgamepoint', player.name + ',' + points);
+
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['addteampoint', 'removeteampoint', 'removeteampoints', 'atpt', 'rtpt'],
 	},
@@ -1009,6 +1072,8 @@ export const commands: BaseCommandDefinitions = {
 			const toPoints = room.userHostedGame.addPoints(to, amount);
 			this.say((amount === fromPoints ? "" : amount + " of ") + from.name + "'s points have been moved to " + to.name + ". Their " +
 				"total is now " + toPoints + ".");
+
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['mpt'],
 	},
@@ -1024,30 +1089,44 @@ export const commands: BaseCommandDefinitions = {
 			if (isNaN(cap)) return this.say("Please specify a valid number.");
 			room.userHostedGame.scoreCap = cap;
 			this.say("The score cap has been set to " + cap + ".");
+
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 	},
 	store: {
 		command(target, room, user, cmd) {
-			if (this.isPm(room) || !room.userHostedGame || !room.userHostedGame.isHost(user)) return;
+			const targets = target.split(",");
+
+			let gameRoom: Room;
+			if (this.isPm(room)) {
+				const targetRoom = Rooms.search(targets[0]);
+				if (!targetRoom) return this.sayError(['invalidBotRoom', targets[0]]);
+				gameRoom = targetRoom;
+				targets.shift();
+			} else {
+				gameRoom = room;
+			}
+
+			if (!gameRoom.userHostedGame || !gameRoom.userHostedGame.isHost(user)) return;
+
 			if (cmd === 'stored' || !target) {
-				if (!room.userHostedGame.storedMessages) {
+				if (!gameRoom.userHostedGame.storedMessages) {
 					return this.say("You must store a message first with ``" + Config.commandCharacter + "store [message]`` or " +
 						"``" + Config.commandCharacter + "storem [key], [message]``.");
 				}
 				const key = Tools.toId(target);
-				if (!(key in room.userHostedGame.storedMessages)) {
+				if (!(key in gameRoom.userHostedGame.storedMessages)) {
 					return this.say("'" + target + "' is not one of your stored keys.");
 				}
-				if (CommandParser.isCommandMessage(room.userHostedGame.storedMessages[key])) {
-					const parts = room.userHostedGame.storedMessages[key].split(" ");
+				if (CommandParser.isCommandMessage(gameRoom.userHostedGame.storedMessages[key])) {
+					const parts = gameRoom.userHostedGame.storedMessages[key].split(" ");
 					this.run(parts[0].substr(1), parts.slice(1).join(" "));
 					return;
 				}
-				this.say(room.userHostedGame.storedMessages[key]);
+				this.say(gameRoom.userHostedGame.storedMessages[key]);
 				return;
 			}
 
-			const targets = target.split(",");
 			let key = "";
 			let keyId = "";
 			if (cmd === 'storemultiple' || cmd === 'storem') {
@@ -1071,40 +1150,96 @@ export const commands: BaseCommandDefinitions = {
 					Config.commandCharacter + "store.");
 			}
 
-			if (!room.userHostedGame.storedMessages) room.userHostedGame.storedMessages = {};
-			room.userHostedGame.storedMessages[keyId] = message;
+			if (!gameRoom.userHostedGame.storedMessages) gameRoom.userHostedGame.storedMessages = {};
+			gameRoom.userHostedGame.storedMessages[keyId] = message;
+
 			this.say("Your message has been stored! You can now repeat it with ``" + Config.commandCharacter + "stored" +
 				(key ? " " + key : "") + "``.");
+			gameRoom.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['stored', 'storemultiple', 'storem'],
 	},
-	twist: {
+	unstore: {
 		command(target, room, user) {
+			const targets = target.split(",");
+
 			let gameRoom: Room;
-			let isPm = false;
 			if (this.isPm(room)) {
-				const targetRoom = Rooms.search(target);
-				if (!targetRoom) return this.sayError(['invalidBotRoom', target]);
+				const targetRoom = Rooms.search(targets[0]);
+				if (!targetRoom) return this.sayError(['invalidBotRoom', targets[0]]);
 				gameRoom = targetRoom;
-				isPm = true;
+				targets.shift();
 			} else {
 				gameRoom = room;
 			}
-			if (!gameRoom.userHostedGame || (!isPm && !gameRoom.userHostedGame.isHost(user))) return;
-			if (!target) {
+
+			if (!gameRoom.userHostedGame || !gameRoom.userHostedGame.isHost(user)) return;
+			if (!gameRoom.userHostedGame.storedMessages) return this.say("You have not stored any messages.");
+
+			const key = Tools.toId(targets[0]);
+			if (!(key in gameRoom.userHostedGame.storedMessages)) {
+				return this.say("'" + targets[0] + "' is not one of your stored keys.");
+			}
+
+			delete gameRoom.userHostedGame.storedMessages[key];
+			this.say("Your " + (key ? "message stored with key '" + key + "'" : "stored message") + " has been removed.");
+
+			gameRoom.userHostedGame.autoRefreshControlPanel();
+		},
+		aliases: ['unstorem'],
+	},
+	twist: {
+		command(target, room, user) {
+			const targets = target.split(",");
+
+			let gameRoom: Room;
+			if (this.isPm(room)) {
+				const targetRoom = Rooms.search(targets[0]);
+				if (!targetRoom) return this.sayError(['invalidBotRoom', targets[0]]);
+				gameRoom = targetRoom;
+				targets.shift();
+				if (!gameRoom.userHostedGame || (targets[0] && !gameRoom.userHostedGame.isHost(user))) return;
+			} else {
+				gameRoom = room;
+				if (!gameRoom.userHostedGame || !gameRoom.userHostedGame.isHost(user)) return;
+			}
+
+			if (!targets[0]) {
 				if (!gameRoom.userHostedGame.twist) return this.say("There is no twist set for the current game.");
 				this.say(gameRoom.userHostedGame.name + " twist: " + gameRoom.userHostedGame.twist);
 				return;
 			}
-			if (isPm) return;
-			gameRoom.userHostedGame.twist = target.trim();
+
+			gameRoom.userHostedGame.twist = targets.join(",").trim();
 			this.say("Your twist has been stored. You can repeat it with ``" + Config.commandCharacter + "twist``.");
+			gameRoom.userHostedGame.autoRefreshControlPanel();
+		},
+	},
+	removetwist: {
+		command(target, room, user) {
+			let gameRoom: Room;
+			if (this.isPm(room)) {
+				const targetRoom = Rooms.search(target);
+				if (!targetRoom) return this.sayError(['invalidBotRoom', target]);
+				gameRoom = targetRoom;
+			} else {
+				gameRoom = room;
+			}
+
+			if (!gameRoom.userHostedGame || !gameRoom.userHostedGame.isHost(user)) return;
+			if (!gameRoom.userHostedGame.twist) return this.say("You have not set a twist.");
+
+			gameRoom.userHostedGame.twist = null;
+			this.say("Your twist has been removed.");
+			gameRoom.userHostedGame.autoRefreshControlPanel();
 		},
 	},
 	savewinner: {
 		command(target, room, user) {
 			if (this.isPm(room) || !room.userHostedGame || !room.userHostedGame.isHost(user)) return;
 			if (room.userHostedGame.teams) return this.say("You cannot store winners once teams have been formed.");
+
+			if (!target) return this.say("You must specify at least 1 player.");
 
 			const targets = target.split(",");
 			if (Config.maxUserHostedGameWinners && room.id in Config.maxUserHostedGameWinners) {
@@ -1134,6 +1269,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			this.run('playerlist');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['savewinners', 'storewinner', 'storewinners'],
 	},
@@ -1148,6 +1284,7 @@ export const commands: BaseCommandDefinitions = {
 			room.userHostedGame.savedWinners.splice(index, 1);
 			room.userHostedGame.players[id].eliminated = false;
 			this.run('playerlist');
+			room.userHostedGame.autoRefreshControlPanel();
 		},
 		aliases: ['removestoredwinner'],
 	},
@@ -1229,6 +1366,9 @@ export const commands: BaseCommandDefinitions = {
 					playerBits = 500;
 				}
 
+				// eslint-disable-next-line @typescript-eslint/no-extra-parens
+				if (Config.afd) playerBits *= (room.userHostedGame.random(50) + 1);
+
 				for (const player of players) {
 					Storage.addPoints(room, Storage.gameLeaderboard, player.name, playerBits, 'userhosted');
 					player.say("You were awarded " + playerBits + " bits! To see your total amount, use this command: ``" +
@@ -1260,9 +1400,19 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			const answer = targets[1].trim();
-			const hint = targets.slice(2).join(',').trim();
-			if (!Tools.toId(answer) || !Tools.toId(hint)) {
-				this.say("Please specify an answer and a hint for the hangman.");
+			const answerId = Tools.toId(answer);
+			if (!answerId || Tools.isInteger(answerId)) {
+				this.say("Your answer must include at least 1 letter.");
+				return;
+			}
+
+			if (answer.length > HANGMAN_ANSWER_MAX_LENGTH) {
+				this.say("Your answer must be less than " + HANGMAN_ANSWER_MAX_LENGTH + " characters.");
+				return;
+			}
+
+			if (answer.split(' ').some(w => w.length > HANGMAN_WORDS_MAX_LENGTH)) {
+				this.say("Each word in your answer must be less than " + HANGMAN_WORDS_MAX_LENGTH + " characters.");
 				return;
 			}
 
@@ -1271,12 +1421,24 @@ export const commands: BaseCommandDefinitions = {
 				return;
 			}
 
+			const hint = targets.slice(2).join(',').trim();
+			if (!Tools.toId(hint)) {
+				this.say("Your hint must include at least 1 letter.");
+				return;
+
+			}
+
+			if (hint.length > HANGMAN_HINT_MAX_LENGTH) {
+				this.say("Your hint must be less than " + HANGMAN_HINT_MAX_LENGTH + " characters.");
+				return;
+			}
+
 			if (Client.checkFilters(hint, gameRoom)) {
 				this.say("Your hint contains a word banned in " + gameRoom.title + ".");
 				return;
 			}
 
-			gameRoom.userHostedGame.sayCommand("/hangman create " + answer + ", " + hint + " [" + user.name + "]");
+			gameRoom.startHangman(answer, hint + " [" + user.name + "]");
 		},
 	},
 	endhangman: {
@@ -1291,7 +1453,7 @@ export const commands: BaseCommandDefinitions = {
 				return;
 			}
 
-			gameRoom.userHostedGame.sayCommand("/hangman end");
+			gameRoom.endHangman();
 		},
 	},
 	randomanswer: {
@@ -1311,7 +1473,7 @@ export const commands: BaseCommandDefinitions = {
 
 			const format = global.Games.getFormat(target, true);
 			if (Array.isArray(format)) return this.sayError(format);
-			if (global.Games.reloadInProgress) return this.sayError(['reloadInProgress']);
+			if (global.Games.isReloadInProgress()) return this.sayError(['reloadInProgress']);
 			if (!format.canGetRandomAnswer) return this.say("This command cannot be used with " + format.name + ".");
 			delete format.inputOptions.points;
 			const game = global.Games.createGame(room, format, pmRoom);
@@ -1323,5 +1485,3 @@ export const commands: BaseCommandDefinitions = {
 		aliases: ['randanswer', 'ranswer', 'randomhint', 'randhint', 'rhint'],
 	},
 };
-
-/* eslint-enable */

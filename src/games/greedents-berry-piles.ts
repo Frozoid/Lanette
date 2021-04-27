@@ -1,6 +1,6 @@
 import type { Player } from '../room-activity';
 import { ScriptedGame } from '../room-game-scripted';
-import type { GameCategory, GameCommandDefinitions, IGameFile } from "../types/games";
+import type { GameCommandDefinitions, IGameFile } from "../types/games";
 
 type BerryType = 'Cheri' | 'Chesto' | 'Pecha' | 'Rawst' | 'Mystery';
 interface IBerryPile {
@@ -290,7 +290,6 @@ class GreedentsBerryPiles extends ScriptedGame {
 
 const commands: GameCommandDefinitions<GreedentsBerryPiles> = {
 	grab: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canGrab || this.players[user.id].frozen) return false;
 			const player = this.players[user.id];
@@ -322,7 +321,6 @@ const commands: GameCommandDefinitions<GreedentsBerryPiles> = {
 		pmGameCommand: true,
 	},
 	run: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.players[user.id].frozen) return false;
 			const player = this.players[user.id];
@@ -336,12 +334,12 @@ const commands: GameCommandDefinitions<GreedentsBerryPiles> = {
 	},
 };
 
-commands.summary = Tools.deepClone(Games.sharedCommands.summary);
+commands.summary = Tools.deepClone(Games.getSharedCommands().summary);
 commands.summary.aliases = ['berries'];
 
 export const game: IGameFile<GreedentsBerryPiles> = {
 	aliases: ["greedents", "berrypiles", "gbp"],
-	category: 'luck' as GameCategory,
+	category: 'luck',
 	commandDescriptions: [Config.commandCharacter + "grab", Config.commandCharacter + "run"],
 	commands,
 	class: GreedentsBerryPiles,

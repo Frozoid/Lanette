@@ -10,7 +10,8 @@ import type { UserHostedGame } from './room-game-user-hosted';
 import type { Room } from './rooms';
 import type {
 	GroupName, IClientMessageTypes, ILoginOptions, IMessageParserFile, IOutgoingMessage, IRoomInfoResponse, IRoomsResponse,
-	IServerConfig, IServerGroup, ITournamentMessageTypes, IUserDetailsResponse, QueryResponseType, ServerGroupData
+	IServerConfig, IServerGroup, IServerProcessingMeasurement, ITournamentMessageTypes, QueryResponseType, ServerGroupData,
+	IUserDetailsResponse
 } from './types/client';
 import type { ISeparatedCustomRules } from './types/dex';
 import type { RoomType } from './types/rooms';
@@ -22,20 +23,43 @@ const MAIN_HOST = "sim3.psim.us";
 const REPLAY_SERVER_ADDRESS = "replay.pokemonshowdown.com";
 const CHALLSTR_TIMEOUT_SECONDS = 15;
 const RELOGIN_SECONDS = 60;
-const REGULAR_MESSAGE_THROTTLE = 625;
-const TRUSTED_MESSAGE_THROTTLE = 125;
-const SERVER_THROTTLE_BUFFER_LIMIT = 6;
+const LOGIN_TIMEOUT_SECONDS = 150;
+const SERVER_RESTART_CONNECTION_TIME = 10 * 1000;
+const REGULAR_MESSAGE_THROTTLE = 600;
+const TRUSTED_MESSAGE_THROTTLE = 100;
+const SERVER_CHAT_QUEUE_LIMIT = 6;
+const SEND_THROTTLE_BUFFER = 1;
 const MAX_MESSAGE_SIZE = 100 * 1024;
 const BOT_GREETING_COOLDOWN = 6 * 60 * 60 * 1000;
 const CONNECTION_CHECK_INTERVAL = 30 * 1000;
-const SERVER_THROTTLE_PROCESSING_TIME = 25;
-const PROCESSING_TIME_CHECK_MINIMUM = 5 * 1000;
+const MAX_PROCESSING_MEASUREMENT_GAP = 30 * 1000;
 const INVITE_COMMAND = '/invite ';
 const HTML_CHAT_COMMAND = '/raw ';
 const UHTML_CHAT_COMMAND = '/uhtml ';
 const UHTML_CHANGE_CHAT_COMMAND = '/uhtmlchange ';
+const ANNOUNCE_CHAT_COMMAND = '/announce ';
 const HANGMAN_START_COMMAND = "/log A game of hangman was started by ";
 const HANGMAN_END_COMMAND = "/log (The game of hangman was ended by ";
+const TOURNAMENT_AUTOSTART_COMMAND = "/log (The tournament was set to autostart when the player cap is reached by ";
+const TOURNAMENT_AUTODQ_COMMAND = "/log (The tournament auto disqualify timer was set to ";
+const TOURNAMENT_FORCEPUBLIC_COMMAND = "/log (Tournament public battles were turned ON by ";
+const TOURNAMENT_SCOUTING_COMMAND = "/log (The tournament was set to disallow scouting by ";
+const TOURNAMENT_MODJOIN_COMMAND = "/log (The tournament was set to disallow modjoin by ";
+const HANGMAN_END_RAW_MESSAGE = "The game of hangman was ended.";
+const HIGHLIGHT_HTML_PAGE_MESSAGE = "Sent a highlight to ";
+const USER_NOT_FOUND_MESSAGE = "/error User ";
+
+const NEWLINE = /\n/g;
+const CODE_LINEBREAK = /<wbr \/>/g;
+const FILTERS_REGEX_N = /\u039d/g;
+// eslint-disable-next-line no-misleading-character-class
+const FILTERS_REGEX_EMPTY_CHARACTERS = /[\u200b\u007F\u00AD\uDB40\uDC00\uDC21]/g;
+const FILTERS_REGEX_O_LEFT = /\u03bf/g;
+const FILTERS_REGEX_O_RIGHT = /\u043e/g;
+const FILTERS_REGEX_A = /\u0430/g;
+const FILTERS_REGEX_E_LEFT = /\u0435/g;
+const FILTERS_REGEX_E_RIGHT = /\u039d/g;
+const FILTERS_REGEX_FORMATTING = /__|\*\*|``|\[\[|\]\]/g;
 
 const DEFAULT_GROUP_SYMBOLS: KeyedDict<GroupName, string> = {
 	'administrator': '&',
@@ -170,56 +194,60 @@ let closeListener: ((code: number, reason: string) => void) | null;
 let pongListener: (() => void) | null;
 
 export class Client {
-	htmlChatCommand: typeof HTML_CHAT_COMMAND = HTML_CHAT_COMMAND;
-	uhtmlChatCommand: typeof UHTML_CHAT_COMMAND = UHTML_CHAT_COMMAND;
-	uhtmlChangeChatCommand: typeof UHTML_CHANGE_CHAT_COMMAND = UHTML_CHANGE_CHAT_COMMAND;
+	private battleFilterRegularExpressions: RegExp[] | null = null;
+	private botGreetingCooldowns: Dict<number> = {};
+	private challstr: string = '';
+	private challstrTimeout: NodeJS.Timer | undefined = undefined;
+	private chatFilterRegularExpressions: RegExp[] | null = null;
+	private configBannedWordsRegex: RegExp | null = null;
+	private connectionAttempts: number = 0;
+	private connectionAttemptTime: number = Config.connectionAttemptTime || 60 * 1000;
+	private connectionTimeout: NodeJS.Timer | undefined = undefined;
+	private evasionFilterRegularExpressions: RegExp[] | null = null;
+	private groupSymbols: KeyedDict<GroupName, string> = DEFAULT_GROUP_SYMBOLS;
+	private incomingMessageQueue: {message: Data, timestamp: number}[] = [];
+	private lastOutgoingMessage: IOutgoingMessage | null = null;
+	private lastProcessingTimeCheck: number = 0;
+	private loggedIn: boolean = false;
+	private loginServerHostname: string = '';
+	private loginServerPath: string = '';
+	private loginTimeout: NodeJS.Timer | undefined = undefined;
+	private messageParsers: IMessageParserFile[] = [];
+	private messageParsersExist: boolean = false;
+	private outgoingMessageQueue: IOutgoingMessage[] = [];
+	private pauseIncomingMessages: boolean = true;
+	private pauseOutgoingMessages: boolean = false;
+	private pingWsAlive: boolean = true;
+	private maxProcessingMeasurementGap = MAX_PROCESSING_MEASUREMENT_GAP;
+	private publicChatRooms: string[] = [];
+	private reconnectRoomMessages: Dict<string[]> = {};
+	private reloadInProgress: boolean = false;
+	private replayServerAddress: string = Config.replayServer || REPLAY_SERVER_ADDRESS;
+	private retryLoginTimeout: NodeJS.Timer | undefined = undefined;
+	private roomsToRejoin: string[] = [];
+	private sendTimeout: NodeJS.Timer | true | undefined = undefined;
+	private sendTimeoutDuration: number = 0;
+	private server: string = Config.server || Tools.mainServer;
+	private serverChatQueueWaits: number = 0;
+	private serverGroupsResponse: ServerGroupData[] = DEFAULT_SERVER_GROUPS;
+	private serverGroups: Dict<IServerGroup> = {};
+	private serverId: string = 'showdown';
+	private serverPingTimeout: NodeJS.Timer | null = null;
+	private serverTimeOffset: number = 0;
+	private serverProcessingMeasurements: IServerProcessingMeasurement[] = [];
+	private webSocket: import('ws') | null = null;
 
-	battleFilterRegularExpressions: RegExp[] | null = null;
-	botGreetingCooldowns: Dict<number> = {};
-	challstr: string = '';
-	challstrTimeout: NodeJS.Timer | undefined = undefined;
-	chatFilterRegularExpressions: RegExp[] | null = null;
-	configBannedWordsRegex: RegExp | null = null;
-	connectionAttempts: number = 0;
-	connectionTimeout: NodeJS.Timer | undefined = undefined;
-	evasionFilterRegularExpressions: RegExp[] | null = null;
-	failedPingTimeout: NodeJS.Timer | null = null;
-	groupSymbols: KeyedDict<GroupName, string> = DEFAULT_GROUP_SYMBOLS;
-	incomingMessageQueue: {message: Data, timestamp: number}[] = [];
-	lastOutgoingMessage: IOutgoingMessage | null = null;
-	lastProcessingTimeCheck: number = 0;
-	lastSendTimeoutTime: number = 0;
-	loggedIn: boolean = false;
-	loginTimeout: NodeJS.Timer | undefined = undefined;
-	messageParsers: IMessageParserFile[] = [];
-	messageParsersExist: boolean = false;
-	outgoingMessageQueue: IOutgoingMessage[] = [];
-	messagesAwaitingProcessingCheck: number = 0;
-	pauseIncomingMessages: boolean = true;
-	pauseOutgoingMessages: boolean = false;
-	pingWsAlive: boolean = true;
-	publicChatRooms: string[] = [];
-	reconnectRoomMessages: Dict<string[]> = {};
-	reconnectTime: number = Config.reconnectTime || 60 * 1000;
-	reloadInProgress: boolean = false;
-	replayServerAddress: string = Config.replayServer || REPLAY_SERVER_ADDRESS;
-	roomsToRejoin: string[] = [];
-	sendThrottle: number = Config.trustedUser ? TRUSTED_MESSAGE_THROTTLE : REGULAR_MESSAGE_THROTTLE;
-	sendTimeout: NodeJS.Timer | true | undefined = undefined;
-	server: string = Config.server || Tools.mainServer;
-	serverGroups: Dict<IServerGroup> = {};
-	serverGroupsResponse: ServerGroupData[] = DEFAULT_SERVER_GROUPS;
-	serverId: string = 'showdown';
-	serverPingTimeout: NodeJS.Timer | null = null;
-	serverTimeOffset: number = 0;
-	serverProcessingTime: number = 0;
-	webSocket: import('ws') | null = null;
+	private chatQueueSendThrottle!: number;
+	private sendThrottle!: number;
+	private sendThrottleWithBuffer!: number;
 
 	constructor() {
 		connectListener = () => this.onConnect();
 		messageListener = (message: Data) => this.onMessage(message, Date.now());
 		errorListener = (error: Error) => this.onConnectionError(error);
 		closeListener = (code: number, description: string) => this.onConnectionClose(code, description);
+
+		this.setSendThrottle(Config.trustedUser ? TRUSTED_MESSAGE_THROTTLE : REGULAR_MESSAGE_THROTTLE);
 
 		if (this.server.startsWith('https://')) {
 			this.server = this.server.substr(8);
@@ -241,7 +269,192 @@ export class Client {
 		this.messageParsersExist = this.messageParsers.length > 0;
 	}
 
-	loadMessageParsersDirectory(directory: string, optional?: boolean): void {
+	getGroupSymbols(): Readonly<KeyedDict<GroupName, string>> {
+		return this.groupSymbols;
+	}
+
+	getServerGroups(): Readonly<Dict<IServerGroup>> {
+		return this.serverGroups;
+	}
+
+	getHtmlChatCommand(): string {
+		return HTML_CHAT_COMMAND;
+	}
+
+	getUhtmlChatCommand(): string {
+		return UHTML_CHAT_COMMAND;
+	}
+
+	getUhtmlChangeChatCommand(): string {
+		return UHTML_CHANGE_CHAT_COMMAND;
+	}
+
+	getLastOutgoingMessage(): Readonly<IOutgoingMessage> | null {
+		return this.lastOutgoingMessage;
+	}
+
+	getServer(): string {
+		return this.server;
+	}
+
+	getReplayServerAddress(): string {
+		return this.replayServerAddress;
+	}
+
+	getOutgoingMessageQueue(): readonly IOutgoingMessage[] {
+		return this.outgoingMessageQueue;
+	}
+
+	getUserAttributionHtml(name: string): string {
+		return '<div style="float:right;color:#888;font-size:8pt">[' + name + ']</div><div style="clear:both"></div>';
+	}
+
+	getListenerHtml(html: string, inPm?: boolean): string {
+		html = '<div class="infobox">' + html;
+		if (!inPm && Users.self.group !== this.groupSymbols.bot) {
+			html += this.getUserAttributionHtml(Users.self.name);
+		}
+		html += '</div>';
+		return html;
+	}
+
+	getListenerUhtml(html: string, inPm?: boolean): string {
+		if (!inPm && Users.self.group !== this.groupSymbols.bot) {
+			html += this.getUserAttributionHtml(Users.self.name);
+		}
+		return html;
+	}
+
+	getCodeListenerHtml(code: string): string {
+		if (code.length < 80 && !code.includes('\n') && !code.includes('```')) return code;
+		return '<div class="infobox"><code style="white-space: pre-wrap; display: table; tab-size: 3">' +
+			code.replace(NEWLINE, "<br />") + '</code></div>';
+	}
+
+	getMsgRoomButton(room: Room, message: string, label: string, disabled?: boolean, buttonStyle?: string): string {
+		return '<button class="button' + (disabled ? " disabled" : "") + '"' + (disabled ? " disabled" : "") +
+			(buttonStyle ? ' style="' + buttonStyle + '"' : '') + 'name="send" value="/msg ' + Users.self.name + ', ' + '/msgroom ' +
+			room.title + ', ' + message + '">' + label + '</button>';
+	}
+
+	getPmUserButton(user: User, message: string, label: string, disabled?: boolean, buttonStyle?: string): string {
+		return '<button class="button' + (disabled ? " disabled" : "") + '"' + (disabled ? " disabled" : "") +
+			(buttonStyle ? ' style="' + buttonStyle + '"' : '') + ' name="send" value="/msg ' + user.name + ', ' + message + '">' +
+			label + '</button>';
+	}
+
+	getPmSelfButton(message: string, label: string, disabled?: boolean, buttonStyle?: string): string {
+		return this.getPmUserButton(Users.self, message, label, disabled, buttonStyle);
+	}
+
+	checkFilters(message: string, room?: Room): string | undefined {
+		if (room) {
+			if (room.configBannedWords) {
+				if (!room.configBannedWordsRegex) {
+					room.configBannedWordsRegex = constructBannedWordRegex(room.configBannedWords);
+				}
+				if (message.match(room.configBannedWordsRegex)) return "config room banned words";
+			}
+
+			if (room.serverBannedWords) {
+				if (!room.serverBannedWordsRegex) {
+					room.serverBannedWordsRegex = constructBannedWordRegex(room.serverBannedWords);
+				}
+				if (message.match(room.serverBannedWordsRegex)) return "server room banned words";
+			}
+		}
+
+		let lowerCase = message
+			.replace(FILTERS_REGEX_N, 'N').toLowerCase()
+			.replace(FILTERS_REGEX_EMPTY_CHARACTERS, '')
+			.replace(FILTERS_REGEX_O_LEFT, 'o')
+			.replace(FILTERS_REGEX_O_RIGHT, 'o')
+			.replace(FILTERS_REGEX_A, 'a')
+			.replace(FILTERS_REGEX_E_LEFT, 'e')
+			.replace(FILTERS_REGEX_E_RIGHT, 'e');
+
+		lowerCase = lowerCase.replace(FILTERS_REGEX_FORMATTING, '');
+
+		if (this.battleFilterRegularExpressions && room && room.type === 'battle') {
+			for (const expression of this.battleFilterRegularExpressions) {
+				if (lowerCase.match(expression)) return "battle filter";
+			}
+		}
+
+		if (this.chatFilterRegularExpressions) {
+			for (const expression of this.chatFilterRegularExpressions) {
+				if (lowerCase.match(expression)) return "chat filter";
+			}
+		}
+
+		if (this.evasionFilterRegularExpressions) {
+			let evasionLowerCase = lowerCase.normalize('NFKC');
+			evasionLowerCase = evasionLowerCase.replace(/[\s-_,.]+/g, '.');
+			for (const expression of this.evasionFilterRegularExpressions) {
+				if (evasionLowerCase.match(expression)) return "evasion filter";
+			}
+		}
+
+		if (this.configBannedWordsRegex && message.match(this.configBannedWordsRegex)) return "config banned words";
+	}
+
+	extractBattleId(source: string): IExtractedBattleId | null {
+		return Tools.extractBattleId(source, this.replayServerAddress, this.server, this.serverId);
+	}
+
+	joinRoom(roomid: string): void {
+		this.send({
+			message: '|/join ' + roomid,
+			roomid,
+			type: 'join-room',
+			measure: true,
+		});
+	}
+
+	send(outgoingMessage: IOutgoingMessage): void {
+		if (!outgoingMessage.message || !this.webSocket) return;
+
+		if (this.sendTimeout || this.pauseOutgoingMessages) {
+			this.outgoingMessageQueue.push(outgoingMessage);
+			return;
+		}
+
+		if (outgoingMessage.message.length > MAX_MESSAGE_SIZE) {
+			throw new Error("Message exceeds server size limit of " + (MAX_MESSAGE_SIZE / 1024) + "KB: " + outgoingMessage.message);
+		}
+
+		this.sendTimeout = true;
+
+		this.webSocket.send(outgoingMessage.message, () => {
+			if (outgoingMessage.measure) outgoingMessage.sentTime = Date.now();
+			this.lastOutgoingMessage = outgoingMessage;
+
+			if (this.sendTimeout === true) this.startSendTimeout();
+		});
+	}
+
+	updateConfigSettings(): void {
+		if (Config.bannedWords && Config.bannedWords.length) this.configBannedWordsRegex = constructBannedWordRegex(Config.bannedWords);
+	}
+
+	getSendThrottle(): number {
+		return this.sendThrottle;
+	}
+
+	getSendThrottleValues(): string[] {
+		return ["Base throttle: " + this.sendThrottle + "ms",
+			"Processing measurements: " + (this.serverProcessingMeasurements.length ?
+			"[" + this.serverProcessingMeasurements.map(x => x.measurement).join(", ") + "]" : "(none)"),
+			"Queued outgoing messages: " + this.outgoingMessageQueue.length];
+	}
+
+	private setSendThrottle(throttle: number): void {
+		this.sendThrottle = throttle;
+		this.sendThrottleWithBuffer = throttle + SEND_THROTTLE_BUFFER;
+		this.chatQueueSendThrottle = throttle * SERVER_CHAT_QUEUE_LIMIT;
+	}
+
+	private loadMessageParsersDirectory(directory: string, optional?: boolean): void {
 		let messageParserFiles: string[] = [];
 		try {
 			messageParserFiles = fs.readdirSync(directory);
@@ -264,7 +477,7 @@ export class Client {
 		}
 	}
 
-	setClientListeners(): void {
+	private setClientListeners(): void {
 		if (!this.webSocket) return;
 
 		this.webSocket.on('open', connectListener!);
@@ -273,7 +486,7 @@ export class Client {
 		this.webSocket.on('close', closeListener!);
 	}
 
-	removeClientListeners(previousClient?: boolean): void {
+	private removeClientListeners(previousClient?: boolean): void {
 		if (!this.webSocket) return;
 
 		if (connectListener) {
@@ -304,11 +517,12 @@ export class Client {
 		if (this.serverPingTimeout) clearTimeout(this.serverPingTimeout);
 	}
 
-	pingServer(): void {
+	private pingServer(): void {
 		if (!this.webSocket || this.reloadInProgress) return;
+
 		if (!this.pingWsAlive) {
 			this.pingWsAlive = true;
-			this.reconnect();
+			this.prepareReconnect();
 			return;
 		}
 
@@ -325,15 +539,22 @@ export class Client {
 		});
 	}
 
-	onReload(previous: Partial<Client>): void {
+	private beforeReload(): void {
+		this.reloadInProgress = true;
+		this.pauseIncomingMessages = true;
+	}
+
+	/* eslint-disable @typescript-eslint/no-unnecessary-condition */
+	private onReload(previous: Client): void {
 		if (previous.challstrTimeout) clearTimeout(previous.challstrTimeout);
 		if (previous.serverPingTimeout) clearTimeout(previous.serverPingTimeout);
 
-		if (previous.lastSendTimeoutTime) this.lastSendTimeoutTime = previous.lastSendTimeoutTime;
-		if (previous.lastOutgoingMessage) this.lastOutgoingMessage = previous.lastOutgoingMessage;
 		if (previous.lastProcessingTimeCheck) this.lastProcessingTimeCheck = previous.lastProcessingTimeCheck;
-		if (previous.messagesAwaitingProcessingCheck) this.messagesAwaitingProcessingCheck = previous.messagesAwaitingProcessingCheck;
-		if (previous.serverProcessingTime) this.serverProcessingTime = previous.serverProcessingTime;
+		if (previous.lastOutgoingMessage) this.lastOutgoingMessage = Object.assign({}, previous.lastOutgoingMessage);
+
+		if (previous.sendTimeoutDuration) this.sendTimeoutDuration = previous.sendTimeoutDuration;
+		if (previous.serverChatQueueWaits) this.serverChatQueueWaits = previous.serverChatQueueWaits;
+		if (previous.serverProcessingMeasurements) this.serverProcessingMeasurements = previous.serverProcessingMeasurements.slice();
 
 		if (previous.outgoingMessageQueue) this.outgoingMessageQueue = previous.outgoingMessageQueue.slice();
 		if (previous.webSocket) {
@@ -369,11 +590,12 @@ export class Client {
 		if (previous.groupSymbols) Object.assign(this.groupSymbols, previous.groupSymbols);
 		if (previous.loggedIn) this.loggedIn = previous.loggedIn;
 		if (previous.publicChatRooms) this.publicChatRooms = previous.publicChatRooms.slice();
-		if (previous.sendThrottle) this.sendThrottle = previous.sendThrottle;
+		if (previous.sendThrottle) this.setSendThrottle(previous.sendThrottle);
 
 		if (previous.sendTimeout) {
 			if (previous.sendTimeout !== true) clearTimeout(previous.sendTimeout);
-			if (!this.sendTimeout) this.setSendTimeout(this.lastSendTimeoutTime);
+			delete previous.sendTimeout;
+			if (!this.sendTimeout) this.startSendTimeout(this.sendTimeoutDuration);
 		}
 
 		if (previous.server) this.server = previous.server;
@@ -392,58 +614,73 @@ export class Client {
 		}
 	}
 
-	clearConnectionTimeouts(): void {
+	/* eslint-enable */
+
+	private clearConnectionTimeouts(): void {
 		if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
 		if (this.challstrTimeout) clearTimeout(this.challstrTimeout);
 		if (this.loginTimeout) clearTimeout(this.loginTimeout);
+		if (this.retryLoginTimeout) clearTimeout(this.retryLoginTimeout);
 		if (this.serverPingTimeout) clearTimeout(this.serverPingTimeout);
 		this.clearSendTimeout();
 	}
 
-	onConnectFail(error?: Error): void {
+	private onConnectFail(error?: Error): void {
 		this.clearConnectionTimeouts();
 
 		console.log('Failed to connect to server ' + this.serverId);
 		if (error) console.log(error.stack);
+
 		this.connectionAttempts++;
-		const reconnectTime = this.reconnectTime * this.connectionAttempts;
+		const reconnectTime = this.connectionAttemptTime * this.connectionAttempts;
 		console.log('Retrying in ' + reconnectTime / 1000 + ' seconds');
 		this.connectionTimeout = setTimeout(() => this.connect(), reconnectTime);
 	}
 
-	onConnectionError(error: Error): void {
+	private onConnectionError(error: Error): void {
 		this.clearConnectionTimeouts();
 
 		console.log('Connection error: ' + error.stack);
 		// 'close' is emitted directly after 'error' so reconnecting is handled in onConnectionClose
 	}
 
-	onConnectionClose(code: number, reason: string): void {
-		this.clearConnectionTimeouts();
+	private onConnectionClose(code: number, reason: string): void {
+		this.terminateWebSocket();
 
 		console.log('Connection closed: ' + reason + ' (' + code + ')');
-		console.log('Reconnecting in ' + this.reconnectTime / 1000 + ' seconds');
+		console.log('Reconnecting in ' + SERVER_RESTART_CONNECTION_TIME / 1000 + ' seconds');
 
-		this.removeClientListeners();
-		this.connectionTimeout = setTimeout(() => this.reconnect(true), this.reconnectTime);
+		this.connectionTimeout = setTimeout(() => this.reconnect(), SERVER_RESTART_CONNECTION_TIME);
 	}
 
-	onConnect(): void {
+	private onConnect(): void {
 		this.clearConnectionTimeouts();
 
 		console.log('Successfully connected');
 
 		this.challstrTimeout = setTimeout(() => {
-			console.log("Did not receive a challstr! Reconnecting in " + this.reconnectTime / 1000 + " seconds");
+			console.log("Did not receive a challstr! Reconnecting in " + this.connectionAttemptTime / 1000 + " seconds");
 			this.terminateWebSocket();
-			this.connectionTimeout = setTimeout(() => this.connect(), this.reconnectTime);
+			this.connectionTimeout = setTimeout(() => this.connect(), this.connectionAttemptTime);
 		}, CHALLSTR_TIMEOUT_SECONDS * 1000);
 
 		this.pingServer();
+
 		void Dex.fetchClientData();
 	}
 
-	connect(): void {
+	private connect(): void {
+		if (Config.username) {
+			const action = new url.URL('https://' + Tools.mainServer + '/~~' + this.serverId + '/action.php');
+			if (!action.hostname || !action.pathname) {
+				console.log("Failed to parse login server URL");
+				process.exit();
+			}
+
+			this.loginServerHostname = action.hostname;
+			this.loginServerPath = action.pathname;
+		}
+
 		const httpsOptions = {
 			hostname: Tools.mainServer,
 			path: '/crossdomain.php?' + querystring.stringify({host: this.server, path: ''}),
@@ -500,52 +737,58 @@ export class Client {
 		});
 	}
 
-	terminateWebSocket(): void {
+	private terminateWebSocket(): void {
+		this.clearConnectionTimeouts();
 		this.removeClientListeners();
+
 		if (this.webSocket) {
 			this.webSocket.terminate();
 			this.webSocket = null;
 		}
+
 		this.pauseOutgoingMessages = true;
 	}
 
-	reconnect(serverRestart?: boolean): void {
-		this.clearConnectionTimeouts();
+	private prepareReconnect(): void {
 		this.terminateWebSocket();
 
-		if (serverRestart) {
+		Tools.logMessage("Client.reconnect() called");
+
+		this.roomsToRejoin = Rooms.getRoomIds();
+		if (Config.rooms && !Config.rooms.includes('lobby')) {
+			const index = this.roomsToRejoin.indexOf('lobby');
+			if (index !== -1) this.roomsToRejoin.splice(index, 1);
+		}
+
+		for (const id of this.roomsToRejoin) {
+			const room = Rooms.get(id)!;
+			let game: ScriptedGame | UserHostedGame | undefined;
+			if (room.game && room.game.started) {
+				game = room.game;
+			} else if (room.userHostedGame && room.userHostedGame.started) {
+				game = room.userHostedGame;
+			}
+
+			if (game) {
+				this.reconnectRoomMessages[room.id] = [Users.self.name + " had to reconnect to the server so the game was " +
+					"forcibly ended."];
+				game.deallocate(true);
+			}
+		}
+
+		for (const id of Users.getUserIds()) {
+			const user = Users.get(id)!;
+			if (user.game) user.game.deallocate(true);
+		}
+
+		this.reconnect(true);
+	}
+
+	private reconnect(prepared?: boolean): void {
+		if (!prepared) {
 			Rooms.removeAll();
 			Users.removeAll();
 			this.outgoingMessageQueue = [];
-		} else {
-			Tools.logMessage("Client.reconnect() called");
-
-			this.roomsToRejoin = Rooms.getRoomIds();
-			if (Config.rooms && !Config.rooms.includes('lobby')) {
-				const index = this.roomsToRejoin.indexOf('lobby');
-				if (index !== -1) this.roomsToRejoin.splice(index, 1);
-			}
-
-			for (const id of this.roomsToRejoin) {
-				const room = Rooms.get(id)!;
-				let game: ScriptedGame | UserHostedGame | undefined;
-				if (room.game && room.game.started) {
-					game = room.game;
-				} else if (room.userHostedGame && room.userHostedGame.started) {
-					game = room.userHostedGame;
-				}
-
-				if (game) {
-					this.reconnectRoomMessages[room.id] = [Users.self.name + " had to reconnect to the server so the game was " +
-						"forcibly ended."];
-					game.deallocate(true);
-				}
-			}
-
-			for (const id of Users.getUserIds()) {
-				const user = Users.get(id)!;
-				if (user.game) user.game.deallocate(true);
-			}
 		}
 
 		this.loggedIn = false;
@@ -553,7 +796,7 @@ export class Client {
 		this.connect();
 	}
 
-	onMessage(webSocketData: Data, now: number): void {
+	private onMessage(webSocketData: Data, now: number): void {
 		if (!webSocketData || typeof webSocketData !== 'string') return;
 
 		if (this.pauseIncomingMessages) {
@@ -573,7 +816,7 @@ export class Client {
 		let room = Rooms.get(roomid);
 		if (!room) {
 			room = Rooms.add(roomid);
-			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'joinroom' &&
+			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'join-room' &&
 				this.lastOutgoingMessage.roomid === room.id) {
 				this.clearLastOutgoingMessage(now);
 			}
@@ -615,7 +858,7 @@ export class Client {
 		}
 	}
 
-	parseMessage(room: Room, rawMessage: string, now: number): void {
+	private parseMessage(room: Room, rawMessage: string, now: number): void {
 		let message: string;
 		let messageType: keyof IClientMessageTypes;
 		if (!rawMessage.startsWith("|")) {
@@ -649,7 +892,16 @@ export class Client {
 			if (this.challstrTimeout) clearTimeout(this.challstrTimeout);
 
 			this.challstr = message;
-			if (Config.username) this.login();
+
+			if (Config.username) {
+				this.loginTimeout = setTimeout(() => {
+					console.log("Failed to login. Reconnecting in " + this.connectionAttemptTime / 1000 + " seconds");
+					this.terminateWebSocket();
+					this.connectionTimeout = setTimeout(() => this.connect(), this.connectionAttemptTime);
+				}, LOGIN_TIMEOUT_SECONDS * 1000);
+
+				this.checkLoginSession();
+			}
 			break;
 		}
 
@@ -680,8 +932,10 @@ export class Client {
 			} else {
 				if (messageArguments.loginStatus !== '1') {
 					console.log('Failed to log in');
-					process.exit();
+					return;
 				}
+
+				if (this.loginTimeout) clearTimeout(this.loginTimeout);
 
 				console.log('Successfully logged in');
 				this.loggedIn = true;
@@ -725,6 +979,11 @@ export class Client {
 					const response = JSON.parse(messageArguments.response) as IRoomInfoResponse;
 					const responseRoom = Rooms.get(response.id);
 					if (responseRoom) {
+						if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'roominfo' &&
+							this.lastOutgoingMessage.roomid === responseRoom.id) {
+							this.clearLastOutgoingMessage(now);
+						}
+
 						responseRoom.onRoomInfoResponse(response);
 						Games.updateGameCatalog(responseRoom);
 					}
@@ -732,23 +991,28 @@ export class Client {
 			} else if (messageArguments.type === 'rooms') {
 				if (messageArguments.response && messageArguments.response !== 'null') {
 					const response = JSON.parse(messageArguments.response) as IRoomsResponse;
-					for (const chatRoom of response.chat) {
-						this.publicChatRooms.push(Tools.toRoomId(chatRoom.title));
+
+					if (response.chat) {
+						for (const chatRoom of response.chat) {
+							this.publicChatRooms.push(Tools.toRoomId(chatRoom.title));
+						}
 					}
-					for (const officialRoom of response.official) {
-						this.publicChatRooms.push(Tools.toRoomId(officialRoom.title));
+
+					if (response.official) {
+						for (const officialRoom of response.official) {
+							this.publicChatRooms.push(Tools.toRoomId(officialRoom.title));
+						}
 					}
-					for (const psplRoom of response.pspl) {
-						this.publicChatRooms.push(Tools.toRoomId(psplRoom.title));
+
+					if (response.pspl) {
+						for (const psplRoom of response.pspl) {
+							this.publicChatRooms.push(Tools.toRoomId(psplRoom.title));
+						}
 					}
 				}
 			} else if (messageArguments.type === 'userdetails') { // eslint-disable-line @typescript-eslint/no-unnecessary-condition
 				if (messageArguments.response && messageArguments.response !== 'null') {
 					const response = JSON.parse(messageArguments.response) as IUserDetailsResponse;
-					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'userdetails' &&
-						this.lastOutgoingMessage.user === response.userid) {
-						this.clearLastOutgoingMessage(now);
-					}
 					if (response.userid === Users.self.id) Users.self.group = response.group;
 				}
 			}
@@ -760,12 +1024,35 @@ export class Client {
 				type: messageParts[0] as RoomType,
 			};
 
+			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'join-room' &&
+				this.lastOutgoingMessage.roomid === room.id) {
+				this.clearLastOutgoingMessage(now);
+			}
+
 			room.init(messageArguments.type);
 			if (room.type === 'chat') {
 				console.log("Joined room: " + room.id);
-				if (room.id === 'staff') room.sayCommand('/filters view');
-				room.sayCommand('/cmd roominfo ' + room.id);
-				room.sayCommand('/banword list');
+				if (room.id === 'staff') {
+					this.send({
+						message: room.sendId + '|/filters view',
+						type: 'filters-view',
+						measure: true,
+					});
+				}
+
+				this.send({
+					message: '|/cmd roominfo ' + room.id,
+					roomid: room.id,
+					type: 'roominfo',
+					measure: true,
+				});
+
+				this.send({
+					message: room.sendId + '|/banword list',
+					roomid: room.id,
+					type: 'banword-list',
+					measure: true,
+				});
 
 				if (room.id in this.reconnectRoomMessages) {
 					for (const reconnectMessage of this.reconnectRoomMessages[room.id]) {
@@ -782,7 +1069,7 @@ export class Client {
 		}
 
 		case 'deinit': {
-			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'leaveroom' &&
+			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'leave-room' &&
 				this.lastOutgoingMessage.roomid === room.id) {
 				this.clearLastOutgoingMessage(now);
 			}
@@ -883,7 +1170,7 @@ export class Client {
 			user.updateStatus(status, away);
 
 			if (user === Users.self && this.publicChatRooms.includes(room.id) && Users.self.hasRank(room, 'driver')) {
-				this.sendThrottle = TRUSTED_MESSAGE_THROTTLE;
+				this.setSendThrottle(TRUSTED_MESSAGE_THROTTLE);
 			}
 
 			Storage.updateLastSeen(user, now);
@@ -903,26 +1190,21 @@ export class Client {
 				username: messageParts[0].substr(1),
 			};
 
-			let rank: string | undefined;
 			let username: string;
 			if (messageArguments.possibleRank in this.serverGroups) {
-				rank = messageArguments.possibleRank;
 				username = messageArguments.username;
 			} else {
 				username = messageArguments.possibleRank + messageArguments.username;
 			}
+
 			const id = Tools.toId(username);
 			if (!id) return;
 
 			const user = Users.add(username, id);
-			if (!rank) {
-				const roomData = user.rooms.get(room);
-				if (roomData && roomData.rank) rank = roomData.rank;
-			}
-
-			room.onUserLeave(user);
 
 			Storage.updateLastSeen(user, now);
+
+			room.onUserLeave(user);
 			break;
 		}
 
@@ -976,11 +1258,18 @@ export class Client {
 			if (roomData) roomData.lastChatMessage = messageArguments.timestamp;
 
 			if (user === Users.self) {
-				if (messageArguments.message.startsWith(HTML_CHAT_COMMAND)) {
+				if (messageArguments.message.startsWith(ANNOUNCE_CHAT_COMMAND)) {
+					const announcement = messageArguments.message.substr(ANNOUNCE_CHAT_COMMAND.length);
+					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'announce' &&
+						Tools.toId(this.lastOutgoingMessage.announcement) === Tools.toId(announcement)) {
+						this.clearLastOutgoingMessage(now);
+					}
+				} else if (messageArguments.message.startsWith(HTML_CHAT_COMMAND)) {
 					const html = Tools.unescapeHTML(messageArguments.message.substr(HTML_CHAT_COMMAND.length));
 					const htmlId = Tools.toId(html);
-					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'html' &&
-						Tools.toId(this.lastOutgoingMessage.html) === htmlId) {
+					if (this.lastOutgoingMessage && ((this.lastOutgoingMessage.type === 'chat-html' &&
+						Tools.toId(this.lastOutgoingMessage.html) === htmlId) || (this.lastOutgoingMessage.type === 'code' &&
+						Tools.toId(this.lastOutgoingMessage.html) === Tools.toId(html.replace(CODE_LINEBREAK, ""))))) {
 						this.clearLastOutgoingMessage(now);
 					}
 
@@ -1006,7 +1295,7 @@ export class Client {
 						const uhtmlId = Tools.toId(uhtmlName);
 						const html = Tools.unescapeHTML(uhtml.substr(commaIndex + 1));
 						const htmlId = Tools.toId(html);
-						if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'uhtml' &&
+						if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'chat-uhtml' &&
 							Tools.toId(this.lastOutgoingMessage.uhtmlName) === uhtmlId &&
 							Tools.toId(this.lastOutgoingMessage.html) === htmlId) {
 							this.clearLastOutgoingMessage(now);
@@ -1022,8 +1311,9 @@ export class Client {
 						}
 					} else {
 						const messageId = Tools.toId(messageArguments.message);
-						if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'chat' &&
-							Tools.toId(this.lastOutgoingMessage.text) === messageId) {
+						if (this.lastOutgoingMessage && ((this.lastOutgoingMessage.type === 'chat' &&
+							Tools.toId(this.lastOutgoingMessage.text) === messageId) || (this.lastOutgoingMessage.type === 'code' &&
+							messageArguments.message.startsWith("```") && Tools.toId(this.lastOutgoingMessage.html) === messageId))) {
 							this.clearLastOutgoingMessage(now);
 						}
 
@@ -1045,8 +1335,84 @@ export class Client {
 			if (messageArguments.message.startsWith('/log ')) {
 				if (messageArguments.message.startsWith(HANGMAN_START_COMMAND)) {
 					room.serverHangman = true;
+
+					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'hangman-start' &&
+						this.lastOutgoingMessage.roomid === room.id &&
+						messageArguments.message.startsWith(HANGMAN_START_COMMAND + Users.self.name)) {
+						this.clearLastOutgoingMessage(now);
+					}
 				} else if (messageArguments.message.startsWith(HANGMAN_END_COMMAND)) {
 					delete room.serverHangman;
+
+					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'hangman-end' &&
+						this.lastOutgoingMessage.roomid === room.id &&
+						messageArguments.message.startsWith(HANGMAN_END_COMMAND + Users.self.name)) {
+						this.clearLastOutgoingMessage(now);
+					}
+				} else if (this.lastOutgoingMessage && this.lastOutgoingMessage.roomid === room.id && user === Users.self) {
+					if (this.lastOutgoingMessage.type === 'room-voice') {
+						if (messageArguments.message.endsWith(" was promoted to Room Voice by " + Users.self.name + ".")) {
+							const promoted = messageArguments.message.substr(5).split(" was promoted to Room Voice by")[0];
+							if (Tools.toId(promoted) === this.lastOutgoingMessage.user) this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'room-deauth') {
+						if (messageArguments.message.endsWith(" was demoted to Room regular user by " + Users.self.name + ".)")) {
+							const demoted = messageArguments.message.substr(6).split(" was demoted to Room regular user by")[0];
+							if (Tools.toId(demoted) === this.lastOutgoingMessage.user) this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'warn') {
+						if (messageArguments.message.endsWith(' was warned by ' + Users.self.name + ". (" +
+							this.lastOutgoingMessage.warnReason + ")")) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'modnote') {
+						const modnoteCommand = '/log (' + Users.self.name + ' notes: ';
+						if (messageArguments.message.startsWith(modnoteCommand) &&
+							messageArguments.message.substr(modnoteCommand.length).startsWith(this.lastOutgoingMessage.modnote!)) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-create') {
+						if (messageArguments.message.startsWith('/log (' + Users.self.name + ' created a tournament in ')) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-start') {
+						if (messageArguments.message.startsWith('/log (' + Users.self.name + ' started the tournament.)')) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-name') {
+						if (messageArguments.message.startsWith("/log (" + Users.self.name + " set the tournament's name to ")) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-cap') {
+						if (messageArguments.message.startsWith("/log (" + Users.self.name + " set the tournament's player cap to ")) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-autostart') {
+						if (messageArguments.message.startsWith(TOURNAMENT_AUTOSTART_COMMAND + Users.self.name)) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-autodq') {
+						if (messageArguments.message.startsWith(TOURNAMENT_AUTODQ_COMMAND) &&
+							messageArguments.message.endsWith(" by " + Users.self.name + ")")) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-forcepulic') {
+						if (messageArguments.message.startsWith(TOURNAMENT_FORCEPUBLIC_COMMAND + Users.self.name)) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-scouting') {
+						if (messageArguments.message.startsWith(TOURNAMENT_SCOUTING_COMMAND + Users.self.name)) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-modjoin') {
+						if (messageArguments.message.startsWith(TOURNAMENT_MODJOIN_COMMAND + Users.self.name)) {
+							this.clearLastOutgoingMessage(now);
+						}
+					} else if (this.lastOutgoingMessage.type === 'tournament-rules') {
+						if (messageArguments.message.startsWith("/log (" + Users.self.name + " updated the tournament's custom rules.")) {
+							this.clearLastOutgoingMessage(now);
+						}
+					}
 				}
 			}
 
@@ -1079,6 +1445,8 @@ export class Client {
 
 			const user = Users.add(messageArguments.username, userId);
 			if (user === Users.self) {
+				if (messageArguments.message.startsWith(USER_NOT_FOUND_MESSAGE)) return;
+
 				const recipientId = Tools.toId(messageArguments.recipientUsername);
 				if (!recipientId) return;
 
@@ -1091,7 +1459,7 @@ export class Client {
 					const html = Tools.unescapeHTML(uhtml.substr(commaIndex + 1));
 					const htmlId = Tools.toId(html);
 
-					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'pmuhtml' &&
+					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'pm-uhtml' &&
 						this.lastOutgoingMessage.user === recipient.id && Tools.toId(this.lastOutgoingMessage.uhtmlName) === uhtmlId &&
 						Tools.toId(this.lastOutgoingMessage.html) === htmlId) {
 						this.clearLastOutgoingMessage(now);
@@ -1110,8 +1478,10 @@ export class Client {
 				} else if (isHtml) {
 					const html = Tools.unescapeHTML(messageArguments.message.substr(HTML_CHAT_COMMAND.length));
 					const htmlId = Tools.toId(html);
-					if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'pmhtml' &&
-						this.lastOutgoingMessage.user === recipient.id && Tools.toId(this.lastOutgoingMessage.html) === htmlId) {
+					if (this.lastOutgoingMessage && this.lastOutgoingMessage.user === recipient.id &&
+						((this.lastOutgoingMessage.type === 'pm-html' && Tools.toId(this.lastOutgoingMessage.html) === htmlId) ||
+						(this.lastOutgoingMessage.type === 'code' &&
+						Tools.toId(this.lastOutgoingMessage.html) === Tools.toId(html.replace(CODE_LINEBREAK, ""))))) {
 						this.clearLastOutgoingMessage(now);
 					}
 
@@ -1167,17 +1537,40 @@ export class Client {
 			const messageArguments: IClientMessageTypes[''] = {
 				message: rawMessage,
 			};
-			if (messageArguments.message.startsWith('Banned phrases in room ')) {
+
+			if (messageArguments.message === 'This room has no banned phrases.') {
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'banword-list' &&
+					this.lastOutgoingMessage.roomid === room.id) {
+					this.clearLastOutgoingMessage(now);
+				}
+			} else if (messageArguments.message.startsWith('Banned phrases in room ')) {
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'banword-list' &&
+					this.lastOutgoingMessage.roomid === room.id) {
+					this.clearLastOutgoingMessage(now);
+				}
+
 				let subMessage = messageArguments.message.split('Banned phrases in room ')[1];
 				const colonIndex = subMessage.indexOf(':');
-				const roomId = subMessage.substr(0, colonIndex);
 				subMessage = subMessage.substr(colonIndex + 2);
 				if (subMessage) {
-					const bannedWordsRoom = Rooms.get(roomId);
-					if (bannedWordsRoom) {
-						bannedWordsRoom.serverBannedWords = subMessage.split(', ');
-						bannedWordsRoom.serverBannedWordsRegex = null;
-					}
+					room.serverBannedWords = subMessage.split(',').map(x => x.trim());
+					room.serverBannedWordsRegex = null;
+				}
+			} else if (messageArguments.message === HANGMAN_END_RAW_MESSAGE) {
+				delete room.serverHangman;
+			} else if (messageArguments.message.startsWith(HIGHLIGHT_HTML_PAGE_MESSAGE)) {
+				const parts = messageArguments.message.substr(HIGHLIGHT_HTML_PAGE_MESSAGE.length).split(" on the bot page ");
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'highlight-htmlpage' &&
+					this.lastOutgoingMessage.roomid === room.id && this.lastOutgoingMessage.user === Tools.toId(parts[0]) &&
+					Tools.toId(this.lastOutgoingMessage.pageId) === Tools.toId(parts[1])) {
+					this.clearLastOutgoingMessage(now);
+				}
+			} else if (messageArguments.message.startsWith("Sent ")) {
+				const parts = messageArguments.message.substr(5).split(" the bot page ");
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'htmlpage' &&
+					this.lastOutgoingMessage.roomid === room.id && this.lastOutgoingMessage.user === Tools.toId(parts[0]) &&
+					Tools.toId(this.lastOutgoingMessage.pageId) === Tools.toId(parts[1])) {
+					this.clearLastOutgoingMessage(now);
 				}
 			}
 			break;
@@ -1199,24 +1592,19 @@ export class Client {
 
 			if (messageArguments.html === '<strong class="message-throttle-notice">Your message was not sent because you\'ve been ' +
 				'typing too quickly.</strong>') {
-				Tools.logMessage("Typing too quickly; Client send timeout = " + this.getSendThrottle() + " (Client.sendThrottle = " +
-					this.sendThrottle + "; Client.serverProcessingTime = " + this.serverProcessingTime + "); " +
-					"Client.outgoingMessageQueue.length = " + this.outgoingMessageQueue.length +
-					(this.lastOutgoingMessage ? "; Client.lastOutgoingMessage = " + JSON.stringify(this.lastOutgoingMessage) : ""));
-
-				if (this.lastOutgoingMessage) {
-					this.outgoingMessageQueue.unshift(this.lastOutgoingMessage);
-					const measuredLastMessage = this.lastOutgoingMessage.measure;
-					this.clearLastOutgoingMessage(this.lastOutgoingMessage.measure ? now : undefined);
-					if (!measuredLastMessage) this.serverProcessingTime += SERVER_THROTTLE_PROCESSING_TIME;
-				} else {
-					this.serverProcessingTime += SERVER_THROTTLE_PROCESSING_TIME;
-				}
-
-				this.setSendTimeout(this.getSendThrottle() * SERVER_THROTTLE_BUFFER_LIMIT);
+				Tools.logMessage("Typing too quickly;\n" + this.getSendThrottleValues().join("\n") +
+					(this.lastOutgoingMessage && this.lastOutgoingMessage.sentTime ?
+					"\n\nMessage sent at: " + new Date(this.lastOutgoingMessage.sentTime).toTimeString() + "; " +
+					"Processing time last measured at: " + new Date(this.lastProcessingTimeCheck).toTimeString() + "; " +
+					"Message: " + JSON.stringify(this.lastOutgoingMessage) : ""));
+				this.startSendTimeout(this.chatQueueSendThrottle);
 			} else if (messageArguments.html.startsWith('<div class="broadcast-red"><strong>Moderated chat was set to ')) {
 				room.modchat = messageArguments.html.split('<div class="broadcast-red">' +
 					'<strong>Moderated chat was set to ')[1].split('!</strong>')[0];
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'modchat' &&
+					this.lastOutgoingMessage.modchatLevel === room.modchat) {
+					this.clearLastOutgoingMessage(now);
+				}
 			} else if (messageArguments.html.startsWith('<div class="broadcast-red"><strong>This battle is invite-only!</strong>') ||
 				messageArguments.html.startsWith('<div class="broadcast-red"><strong>This room is now invite only!</strong>')) {
 				room.inviteOnlyBattle = true;
@@ -1244,7 +1632,7 @@ export class Client {
 					}
 
 					room.tournament.format.customRules = Dex.combineCustomRules(separatedCustomRules);
-					room.tournament.format.separatedCustomRules = null;
+					delete room.tournament.format.separatedCustomRules;
 					if (!room.tournament.manuallyNamed) room.tournament.setCustomFormatName();
 				}
 			} else if (messageArguments.html.startsWith('<div class="broadcast-green"><p style="text-align:left;font-weight:bold;' +
@@ -1262,7 +1650,7 @@ export class Client {
 			} else if (messageArguments.html === "<b>The tournament's custom rules were cleared.</b>") {
 				if (room.tournament) {
 					room.tournament.format.customRules = null;
-					room.tournament.format.separatedCustomRules = null;
+					delete room.tournament.format.separatedCustomRules;
 					if (!room.tournament.manuallyNamed) room.tournament.setCustomFormatName();
 				}
 			}
@@ -1271,6 +1659,10 @@ export class Client {
 
 		case 'pagehtml': {
 			if (room.id === 'view-filters') {
+				if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'filters-view') {
+					this.clearLastOutgoingMessage(now);
+				}
+
 				let battleFilterRegularExpressions: RegExp[] | null = null;
 				let chatFilterRegularExpressions: RegExp[] | null = null;
 				let evasionFilterRegularExpressions: RegExp[] | null = null;
@@ -1352,6 +1744,35 @@ export class Client {
 					room.uhtmlMessageListeners[id][htmlId](now);
 					delete room.uhtmlMessageListeners[id][htmlId];
 				}
+			}
+			break;
+		}
+
+		case 'tempnotify': {
+			const messageArguments: IClientMessageTypes['tempnotify'] = {
+				id: messageParts[0],
+				title: messageParts[1],
+				message: messageParts[2],
+				highlight: messageParts[3],
+			};
+
+			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'notifyrank' &&
+				this.lastOutgoingMessage.roomid === room.id && this.lastOutgoingMessage.notifyId === messageArguments.id &&
+				messageArguments.title.startsWith(this.lastOutgoingMessage.notifyTitle!) &&
+				this.lastOutgoingMessage.notifyMessage === messageArguments.message) {
+				this.clearLastOutgoingMessage(now);
+			}
+			break;
+		}
+
+		case 'tempnotifyoff': {
+			const messageArguments: IClientMessageTypes['tempnotifyoff'] = {
+				id: messageParts[0],
+			};
+
+			if (this.lastOutgoingMessage && this.lastOutgoingMessage.type === 'notifyoffrank' &&
+				this.lastOutgoingMessage.roomid === room.id && this.lastOutgoingMessage.notifyId === messageArguments.id) {
+				this.clearLastOutgoingMessage(now);
 			}
 			break;
 		}
@@ -1632,7 +2053,7 @@ export class Client {
 		}
 	}
 
-	parseChatMessage(room: Room, user: User, message: string, now: number): void {
+	private parseChatMessage(room: Room, user: User, message: string, now: number): void {
 		CommandParser.parse(room, user, message, now);
 
 		const lowerCaseMessage = message.toLowerCase();
@@ -1642,7 +2063,7 @@ export class Client {
 			lowerCaseMessage.includes(this.replayServerAddress) && !user.hasRank(room, 'voice')) {
 			const battle = this.extractBattleId(lowerCaseMessage);
 			if (battle && room.tournament.battleRooms.includes(battle.publicId)) {
-				room.sayCommand("/warn " + user.name + ", Please do not link to tournament battles");
+				room.warn(user, "Please do not link to tournament battles");
 			}
 		}
 
@@ -1651,7 +2072,7 @@ export class Client {
 			lowerCaseMessage.includes(this.server)) && !user.hasRank(room, 'voice')) {
 			const battle = this.extractBattleId(lowerCaseMessage);
 			if (battle && room.game.battleRooms.includes(battle.publicId)) {
-				room.sayCommand("/warn " + user.name + ", Please do not link to game battles");
+				room.warn(user, "Please do not link to game battles");
 			}
 		}
 
@@ -1677,7 +2098,7 @@ export class Client {
 					for (const i in room.approvedUserHostedTournaments) {
 						if (room.approvedUserHostedTournaments[i].urls.includes(link)) {
 							if (!authOrTHC && room.approvedUserHostedTournaments[i].hostId !== user.id) {
-								room.sayCommand("/warn " + user.name + ", Please do not post links to other hosts' tournaments");
+								room.warn(user, "Please do not post links to other hosts' tournaments");
 							}
 							break outer;
 						}
@@ -1698,20 +2119,20 @@ export class Client {
 					for (const i in room.newUserHostedTournaments) {
 						if (room.newUserHostedTournaments[i].urls.includes(link)) {
 							if (room.newUserHostedTournaments[i].hostId !== user.id) {
-								room.sayCommand("/warn " + user.name + ", Please do not post links to other hosts' tournaments");
+								room.warn(user, "Please do not post links to other hosts' tournaments");
 							} else if (room.newUserHostedTournaments[i].approvalStatus === 'changes-requested') {
 								let name = room.newUserHostedTournaments[i].reviewer;
 								const reviewer = Users.get(name);
 								if (reviewer) name = reviewer.name;
-								room.sayCommand("/warn " + user.name + ", " + name + " has requested changes for your tournament and you " +
+								room.warn(user, name + " has requested changes for your tournament and you " +
 									"must wait for them to be approved");
 							} else {
-								room.sayCommand("/warn " + user.name + ", You must wait for a staff member to approve your tournament");
+								room.warn(user, "You must wait for a staff member to approve your tournament");
 							}
 							break outer;
 						}
 					}
-					room.sayCommand("/warn " + user.name + ", Your tournament must be approved by a staff member");
+					room.warn(user, "Your tournament must be approved by a staff member");
 					user.say('Use the command ``' + Config.commandCharacter + 'gettourapproval ' + room.id + ', __bracket link__, ' +
 						'__signup link__`` to get your tournament approved (insert your actual links).');
 					break;
@@ -1723,7 +2144,7 @@ export class Client {
 		if (room.game && room.game.parseChatMessage) room.game.parseChatMessage(user, message);
 	}
 
-	parseServerGroups(): void {
+	private parseServerGroups(): void {
 		this.serverGroups = {};
 
 		let ranking = this.serverGroupsResponse.length;
@@ -1739,168 +2160,46 @@ export class Client {
 		}
 	}
 
-	updateConfigSettings(): void {
-		if (Config.bannedWords && Config.bannedWords.length) this.configBannedWordsRegex = constructBannedWordRegex(Config.bannedWords);
-	}
-
-	checkFilters(message: string, room?: Room): string | undefined {
-		let lowerCase = message.replace(/\u039d/g, 'N').toLowerCase().replace(/[\u200b\u007F\u00AD\uDB40\uDC00\uDC21]/gu, '')
-			.replace(/\u03bf/g, 'o').replace(/\u043e/g, 'o').replace(/\u0430/g, 'a').replace(/\u0435/g, 'e').replace(/\u039d/g, 'e');
-		lowerCase = lowerCase.replace(/__|\*\*|``|\[\[|\]\]/g, '');
-
-		if (this.battleFilterRegularExpressions && room && room.type === 'battle') {
-			for (const expression of this.battleFilterRegularExpressions) {
-				if (lowerCase.match(expression)) return "battle filter";
-			}
-		}
-
-		if (this.chatFilterRegularExpressions) {
-			for (const expression of this.chatFilterRegularExpressions) {
-				if (lowerCase.match(expression)) return "chat filter";
-			}
-		}
-
-		if (this.evasionFilterRegularExpressions) {
-			let evasionLowerCase = lowerCase.normalize('NFKC');
-			evasionLowerCase = evasionLowerCase.replace(/[\s-_,.]+/g, '.');
-			for (const expression of this.evasionFilterRegularExpressions) {
-				if (evasionLowerCase.match(expression)) return "evasion filter";
-			}
-		}
-
-		if (room) {
-			if (room.configBannedWords) {
-				if (!room.configBannedWordsRegex) {
-					room.configBannedWordsRegex = constructBannedWordRegex(room.configBannedWords);
-				}
-				if (message.match(room.configBannedWordsRegex)) return "config room banned words";
-			}
-
-			if (room.serverBannedWords) {
-				if (!room.serverBannedWordsRegex) {
-					room.serverBannedWordsRegex = constructBannedWordRegex(room.serverBannedWords);
-				}
-				if (message.match(room.serverBannedWordsRegex)) return "server room banned words";
-			}
-		}
-
-		if (this.configBannedWordsRegex && message.match(this.configBannedWordsRegex)) return "config banned words";
-	}
-
-	getListenerHtml(html: string, inPm?: boolean): string {
-		html = '<div class="infobox">' + html;
-		if (!inPm && Users.self.group !== this.groupSymbols.bot) {
-			html += '<div style="float:right;color:#888;font-size:8pt">[' + Users.self.name + ']</div><div style="clear:both"></div>';
-		}
-		html += '</div>';
-		return html;
-	}
-
-	getListenerUhtml(html: string, inPm?: boolean): string {
-		if (!inPm && Users.self.group !== this.groupSymbols.bot) {
-			html += '<div style="float:right;color:#888;font-size:8pt">[' + Users.self.name + ']</div><div style="clear:both"></div>';
-		}
-		return html;
-	}
-
-	getPmUserButton(user: User, message: string, label: string, disabled?: boolean): string {
-		return '<button class="button' + (disabled ? " disabled" : "") + '" name="send" value="/msg ' + user.name + ', ' + message + '">' +
-			label + '</button>';
-	}
-
-	getPmSelfButton(message: string, label: string, disabled?: boolean): string {
-		return this.getPmUserButton(Users.self, message, label, disabled);
-	}
-
-	extractBattleId(source: string): IExtractedBattleId | null {
-		return Tools.extractBattleId(source, this.replayServerAddress, this.server, this.serverId);
-	}
-
-	joinRoom(roomid: string): void {
-		this.send({
-			message: '|/join ' + roomid,
-			roomid,
-			type: 'joinroom',
-			measure: true,
-		});
-	}
-
-	send(outgoingMessage: IOutgoingMessage): void {
-		if (!outgoingMessage.message) return;
-
-		if (outgoingMessage.message.length > MAX_MESSAGE_SIZE) {
-			throw new Error("Message exceeds server size limit of " + (MAX_MESSAGE_SIZE / 1024) + "KB: " + outgoingMessage.message);
-		}
-
-		if (!this.webSocket || this.sendTimeout || this.pauseOutgoingMessages) {
-			this.outgoingMessageQueue.push(outgoingMessage);
-			return;
-		}
-
-		if (Date.now() - this.lastProcessingTimeCheck > PROCESSING_TIME_CHECK_MINIMUM) {
-			this.outgoingMessageQueue.splice(this.messagesAwaitingProcessingCheck, 0, outgoingMessage);
-			this.messagesAwaitingProcessingCheck++;
-
-			outgoingMessage = {
-				message: "|/cmd userdetails " + Users.self.id,
-				type: 'userdetails',
-				user: Users.self.id,
-				measure: true,
-			};
-		} else if (this.messagesAwaitingProcessingCheck) {
-			this.messagesAwaitingProcessingCheck = 0;
-		}
-
-		outgoingMessage.serverProcessingTime = this.serverProcessingTime;
-
-		this.sendTimeout = true;
-		this.webSocket.send(outgoingMessage.message, () => {
-			const now = Date.now();
-			if (this.sendTimeout === true && !this.reloadInProgress && this === global.Client) {
-				if (outgoingMessage.measure) outgoingMessage.sentTime = now;
-				this.lastOutgoingMessage = outgoingMessage;
-
-				this.setSendTimeout();
-			}
-		});
-	}
-
-	clearLastOutgoingMessage(responseTime?: number): void {
+	private clearLastOutgoingMessage(responseTime?: number): void {
 		if (this.lastOutgoingMessage) {
-			const oldServerProcessingTime = this.serverProcessingTime;
-
 			if (this.lastOutgoingMessage.measure && this.lastOutgoingMessage.sentTime && responseTime) {
-				this.serverProcessingTime = responseTime - this.lastOutgoingMessage.sentTime;
+				const measurement = responseTime - this.lastOutgoingMessage.sentTime;
+
+				this.serverProcessingMeasurements.push({
+					measurement,
+					timestamp: responseTime,
+				});
+
+				while (responseTime - this.serverProcessingMeasurements[0].timestamp > this.maxProcessingMeasurementGap) {
+					this.serverProcessingMeasurements.shift();
+				}
+
 				this.lastProcessingTimeCheck = responseTime;
+
+				this.startSendTimeout(measurement >= this.chatQueueSendThrottle ? this.chatQueueSendThrottle : this.sendThrottleWithBuffer);
 			}
 
 			this.lastOutgoingMessage = null;
-
-			if (this.sendTimeout && this.sendTimeout !== true && this.serverProcessingTime > oldServerProcessingTime) {
-				this.setSendTimeout(this.getSendThrottle() + (this.serverProcessingTime - oldServerProcessingTime));
-			}
 		}
 	}
 
-	getSendThrottle(): number {
-		return this.sendThrottle + this.serverProcessingTime;
-	}
-
-	clearSendTimeout(): void {
+	private clearSendTimeout(): void {
 		if (this.sendTimeout) {
-			if (this.sendTimeout === true) {
-				delete this.sendTimeout;
-			} else {
-				clearTimeout(this.sendTimeout);
-			}
+			if (this.sendTimeout !== true) clearTimeout(this.sendTimeout);
+			delete this.sendTimeout;
 		}
 	}
 
-	setSendTimeout(time?: number): void {
+	private startSendTimeout(time?: number): void {
 		this.clearSendTimeout();
+		if (this.reloadInProgress) {
+			this.sendTimeout = true;
+			return;
+		}
 
-		if (!time) time = this.getSendThrottle();
-		this.lastSendTimeoutTime = time;
+		if (!time) time = this.chatQueueSendThrottle;
+
+		this.sendTimeoutDuration = time;
 		this.sendTimeout = setTimeout(() => {
 			if (this.reloadInProgress) {
 				this.sendTimeout = true;
@@ -1913,18 +2212,87 @@ export class Client {
 		}, time);
 	}
 
-	login(): void {
-		if (this.loginTimeout) clearTimeout(this.loginTimeout);
+	private setRetryLoginTimeout(sessionUpkeep?: boolean): void {
+		console.log((sessionUpkeep ? 'Trying' : 'Retrying') + ' login in' + RELOGIN_SECONDS + ' seconds');
 
-		const action = new url.URL('https://' + Tools.mainServer + '/~~' + this.serverId + '/action.php');
-		if (!action.hostname || !action.pathname) {
-			console.log("Failed to parse login URL");
-			process.exit();
+		if (this.retryLoginTimeout) clearTimeout(this.retryLoginTimeout);
+		this.retryLoginTimeout = setTimeout(() => this.login(), RELOGIN_SECONDS * 1000);
+	}
+
+	private checkLoginSession(): void {
+		const globalDatabase = Storage.getGlobalDatabase();
+		if (!Config.password || !globalDatabase.loginSessionCookie) {
+			this.login();
+			return;
 		}
 
 		const options: ILoginOptions = {
-			hostname: action.hostname,
-			path: action.pathname,
+			hostname: this.loginServerHostname,
+			path: this.loginServerPath,
+			agent: false,
+			method: 'POST',
+		};
+
+		const postData =  querystring.stringify({
+			'act': 'upkeep',
+			'challstr': this.challstr,
+		});
+
+		options.headers = {
+			'Content-Type': 'application/x-www-form-urlencoded',
+			'Content-Length': postData.length,
+			'cookie': globalDatabase.loginSessionCookie,
+		};
+
+		const request = https.request(options, response => {
+			response.setEncoding('utf8');
+			let data = '';
+			response.on('data', chunk => {
+				data += chunk;
+			});
+			response.on('end', () => {
+				if (!data) {
+					console.log('Did not receive a response from the login server.');
+					this.login();
+					return;
+				}
+
+				if (data.charAt(0) === ']') data = data.substr(1);
+
+				let sessionAssertion: string | undefined;
+				try {
+					const sessionResponse = JSON.parse(data) as {assertion?: string; username?: string, loggedin?: boolean};
+					if (sessionResponse.username && sessionResponse.loggedin) {
+						sessionAssertion = sessionResponse.assertion;
+					}
+				} catch (e) {
+					console.log('Error parsing session upkeep response:\n' + (e as Error).stack);
+					this.setRetryLoginTimeout(true);
+					return;
+				}
+
+				if (!sessionAssertion || !this.verifyLoginAssertion(sessionAssertion, true)) {
+					delete globalDatabase.loginSessionCookie;
+					this.login();
+				}
+			});
+		});
+
+		request.on('error', error => {
+			console.log('Error in session upkeep call: ' + error.stack);
+			this.setRetryLoginTimeout(true);
+		});
+
+		if (postData) request.write(postData);
+		request.end();
+	}
+
+	private login(): void {
+		if (this.retryLoginTimeout) clearTimeout(this.retryLoginTimeout);
+
+		const options: ILoginOptions = {
+			hostname: this.loginServerHostname,
+			path: this.loginServerPath,
 			agent: false,
 			method: '',
 		};
@@ -1958,66 +2326,110 @@ export class Client {
 				data += chunk;
 			});
 			response.on('end', () => {
-				if (data === ';') {
-					console.log('Failed to log in: invalid password');
-					process.exit();
-				} else if (!data.startsWith(']')) {
-					console.log('Failed to log in: ' + data);
-					process.exit();
-				} else if (data.startsWith('<!DOCTYPE html>')) {
-					console.log('Failed to log in: connection timed out. Trying again in ' + RELOGIN_SECONDS + ' seconds');
-					if (this.loginTimeout) clearTimeout(this.loginTimeout);
-					this.loginTimeout = setTimeout(() => this.login(), RELOGIN_SECONDS * 1000);
+				if (!data) {
+					console.log('Did not receive a response from the login server.');
+					this.setRetryLoginTimeout();
 					return;
-				} else if (data.includes('heavy load')) {
-					console.log('Failed to log in: the login server is under heavy load. Trying again in ' + (RELOGIN_SECONDS * 5) +
-						' seconds');
-					if (this.loginTimeout) clearTimeout(this.loginTimeout);
-					this.loginTimeout = setTimeout(() => this.login(), RELOGIN_SECONDS * 5 * 1000);
-					return;
-				} else {
-					if (Config.password) {
-						const assertion = JSON.parse(data.substr(1)) as {actionsuccess?: boolean; assertion?: string};
-						if (assertion.actionsuccess && assertion.assertion) {
-							data = assertion.assertion;
-						} else {
-							console.log('Failed to log in: ' + data.substr(1));
-							process.exit();
+				}
+
+				if (response.headers['set-cookie']) {
+					for (const cookie of response.headers['set-cookie']) {
+						const equalsIndex = cookie.indexOf('=');
+						if (equalsIndex !== -1 && cookie.substr(0, equalsIndex) === 'sid') {
+							let value = cookie;
+							const semiColonIndex = value.indexOf(';');
+							if (semiColonIndex !== -1) value = value.substr(0, semiColonIndex);
+
+							Storage.getGlobalDatabase().loginSessionCookie = value;
+							Storage.exportGlobalDatabase();
 						}
 					}
+				}
 
-					if (this.loginTimeout) {
-						clearTimeout(this.loginTimeout);
-						delete this.loginTimeout;
+				if (data.charAt(0) === ']') data = data.substr(1);
+
+				let loginAssertion = '';
+				try {
+					const loginResponse = JSON.parse(data) as {assertion: string; curuser?: {loggedin: boolean}};
+					if (Config.password && (!loginResponse.curuser || !loginResponse.curuser.loggedin)) {
+						console.log('Failed to log in.');
+						this.setRetryLoginTimeout();
+						return;
 					}
 
-					this.send({message: '|/trn ' + Config.username + ',0,' + data, type: 'command'});
+					loginAssertion = loginResponse.assertion;
+				} catch (e) {
+					console.log('Error parsing login response:\n' + (e as Error).stack);
+					this.setRetryLoginTimeout();
+					return;
 				}
+
+				this.verifyLoginAssertion(loginAssertion);
 			});
 		});
 
 		request.on('error', error => {
-			console.log('Login error: ' + error.stack);
-			console.log('Trying again in ' + RELOGIN_SECONDS + ' seconds');
-			if (this.loginTimeout) clearTimeout(this.loginTimeout);
-			this.loginTimeout = setTimeout(() => this.login(), RELOGIN_SECONDS * 1000);
+			console.log('Error in login call: ' + error.stack);
+			this.setRetryLoginTimeout();
 		});
 
 		if (postData) request.write(postData);
 		request.end();
+	}
+
+	private verifyLoginAssertion(assertion: string, sessionUpkeep?: boolean): boolean {
+		if (assertion.slice(0, 14).toLowerCase() === '<!doctype html') {
+			const endIndex = assertion.indexOf('>');
+			if (endIndex !== -1) assertion = assertion.slice(endIndex + 1);
+		}
+		if (assertion.charAt(0) === '\r') assertion = assertion.slice(1);
+		if (assertion.charAt(0) === '\n') assertion = assertion.slice(1);
+		if (assertion.indexOf('<') >= 0) {
+			const message = 'Something is interfering with the connection to the login server.';
+			if (sessionUpkeep) {
+				console.log(message + ' (session upkeep)');
+			} else {
+				console.log(message);
+				this.setRetryLoginTimeout();
+			}
+			return false;
+		}
+
+		if (assertion.substr(0, 2) === ';;') {
+			if (sessionUpkeep) {
+				console.log('Failed to check session: invalid cookie');
+				return false;
+			} else {
+				console.log('Failed to log in: invalid username or password');
+				process.exit();
+			}
+		} else if (assertion.indexOf('\n') >= 0 || !assertion) {
+			const message = 'Something is interfering with the connection to the login server.';
+			if (sessionUpkeep) {
+				console.log(message + ' (session upkeep)');
+			} else {
+				console.log(message);
+				this.setRetryLoginTimeout();
+			}
+			return false;
+		} else {
+			this.send({message: '|/trn ' + Config.username + ',0,' + assertion, type: 'command'});
+			return true;
+		}
 	}
 }
 
 export const instantiate = (): void => {
 	const oldClient = global.Client as Client | undefined;
 	if (oldClient) {
-		oldClient.reloadInProgress = true;
-		oldClient.pauseIncomingMessages = true;
+		// @ts-expect-error
+		oldClient.beforeReload();
 	}
 
 	global.Client = new Client();
 
 	if (oldClient) {
+		// @ts-expect-error
 		global.Client.onReload(oldClient);
 	}
 };

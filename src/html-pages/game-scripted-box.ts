@@ -2,149 +2,256 @@ import type { Room } from "../rooms";
 import type { BaseCommandDefinitions } from "../types/command-parser";
 import type { IGameFormat } from "../types/games";
 import type { IPokemon } from "../types/pokemon-showdown";
-import type { IGameScriptedBox } from "../types/storage";
+import type { IDatabase } from "../types/storage";
 import type { HexCode } from "../types/tools";
 import type { User } from "../users";
+import type { IColorPick } from "./components/color-picker";
+import { ColorPicker } from "./components/color-picker";
 import { HtmlPageBase } from "./html-page-base";
 
 const iconLimit = 1 as number;
-const backgroundColorsPerRow = 15;
-const buttonColorsPerRow = 15;
 
-const noBackground = 'None';
 const baseCommand = 'gamescriptedbox';
 const setGameFormatCommand = 'setgameformat';
 const setGameFormatSeparateCommand = 'gsbformat';
 const setPokemonCommand = 'setpokemon';
 const setPokemonSeparateCommand = 'gsbpokemon';
+const chooseBackgroundColorPicker = 'choosebackgroundcolorpicker';
+const chooseButtonColorPicker = 'choosebuttoncolorpicker';
+const chooseSignupsBackgroundColorPicker = 'choosesignupsbackgroundcolorpicker';
+const chooseSignupsButtonColorPicker = 'choosesignupsbuttoncolorpicker';
 const setBackgroundColorCommand = 'setbackgroundcolor';
 const setButtonColorCommand = 'setbuttonscolor';
-const standardBackgroundColorsCommand = 'standardbackgroundcolors';
-const lighterBackgroundColorsCommand = 'lighterbackgroundcolors';
-const darkerBackgroundColorsCommand = 'darkerbackgroundcolors';
-const standardButtonColorsCommand = 'standardbuttoncolors';
-const lighterButtonColorsCommand = 'lighterbuttoncolors';
-const darkerButtonColorsCommand = 'darkerbuttoncolors';
+const setSignupsBackgroundColorCommand = 'setsignupsbackgroundcolor';
+const setSignupsButtonColorCommand = 'setsignupsbuttonscolor';
 const closeCommand = 'close';
 
 const pages: Dict<GameScriptedBox> = {};
 
 class GameScriptedBox extends HtmlPageBase {
-	static standardBackgroundColors: HexCode[] = [];
-	static standardBackgroundColorsLength: number = 0;
-	static lighterBackgroundColors: HexCode[] = [];
-	static lighterBackgroundColorsLength: number = 0;
-	static darkerBackgroundColors: HexCode[] = [];
-	static darkerBackgroundColorsLength: number = 0;
-	static standardButtonColors: HexCode[] = [];
-	static standardButtonColorsLength: number = 0;
-	static lighterButtonColors: HexCode[] = [];
-	static lighterButtonColorsLength: number = 0;
-	static darkerButtonColors: HexCode[] = [];
-	static darkerButtonColorsLength: number = 0;
-	static loadedData: boolean = false;
-
-	backgroundColorType: 'standard' | 'lighter' | 'darker' = 'standard';
-	buttonColorType: 'standard' | 'lighter' | 'darker' = 'standard';
-	gameFormat: string = 'pmp';
 	pageId = 'game-scripted-box';
 
-	constructor(room: Room, user: User) {
-		super(room, user);
+	gameFormat: string;
 
-		GameScriptedBox.loadData();
+	backgroundColorPicker: ColorPicker;
+	buttonColorPicker: ColorPicker;
+	signupsBackgroundColorPicker: ColorPicker;
+	signupsButtonColorPicker: ColorPicker;
+	currentPicker: 'background' | 'buttons' | 'signups-background' | 'signups-buttons' = 'background';
+
+	constructor(room: Room, user: User) {
+		super(room, user, baseCommand);
+
+		const database = Storage.getDatabase(this.room);
+		let currentBackgroundColor: HexCode | undefined;
+		let currentButtonColor: HexCode | undefined;
+		let currentSignupsBackgroundColor: HexCode | undefined;
+		let currentSignupsButtonColor: HexCode | undefined;
+		let previewFormat: string | undefined;
+		if (database.gameScriptedBoxes && this.userId in database.gameScriptedBoxes) {
+			currentBackgroundColor = database.gameScriptedBoxes[this.userId].background;
+			currentButtonColor = database.gameScriptedBoxes[this.userId].buttons;
+			currentSignupsBackgroundColor = database.gameScriptedBoxes[this.userId].signupsBackground;
+			currentSignupsButtonColor = database.gameScriptedBoxes[this.userId].signupsButtons;
+			previewFormat = database.gameScriptedBoxes[this.userId].previewFormat;
+		}
+
+		this.gameFormat = previewFormat || "pmp";
+
+		this.backgroundColorPicker = new ColorPicker(this.commandPrefix, setBackgroundColorCommand, {
+			currentPick: currentBackgroundColor,
+			onPickHueVariation: (index, hueVariation, dontRender) => this.pickBackgroundHueVariation(dontRender),
+			onPickLightness: (index, lightness, dontRender) => this.pickBackgroundLightness(dontRender),
+			onClear: (index, dontRender) => this.clearBackgroundColor(dontRender),
+			onPick: (index, color, dontRender) => this.setBackgroundColor(color, dontRender),
+			reRender: () => this.send(),
+		});
+
+		this.buttonColorPicker = new ColorPicker(this.commandPrefix, setButtonColorCommand, {
+			currentPick: currentButtonColor,
+			onPickHueVariation: (index, hueVariation, dontRender) => this.pickButtonHueVariation(dontRender),
+			onPickLightness: (index, lightness, dontRender) => this.pickButtonLightness(dontRender),
+			onClear: (index, dontRender) => this.clearButtonsColor(dontRender),
+			onPick: (index, color, dontRender) => this.setButtonsColor(color, dontRender),
+			reRender: () => this.send(),
+		});
+		this.buttonColorPicker.active = false;
+
+		this.signupsBackgroundColorPicker = new ColorPicker(this.commandPrefix, setSignupsBackgroundColorCommand, {
+			currentPick: currentSignupsBackgroundColor,
+			onPickHueVariation: (index, hueVariation, dontRender) => this.pickBackgroundHueVariation(dontRender),
+			onPickLightness: (index, lightness, dontRender) => this.pickBackgroundLightness(dontRender),
+			onClear: (index, dontRender) => this.clearSignupsBackgroundColor(dontRender),
+			onPick: (index, color, dontRender) => this.setSignupsBackgroundColor(color, dontRender),
+			reRender: () => this.send(),
+		});
+		this.signupsBackgroundColorPicker.active = false;
+
+		this.signupsButtonColorPicker = new ColorPicker(this.commandPrefix, setSignupsButtonColorCommand, {
+			currentPick: currentSignupsButtonColor,
+			onPickHueVariation: (index, hueVariation, dontRender) => this.pickButtonHueVariation(dontRender),
+			onPickLightness: (index, lightness, dontRender) => this.pickButtonLightness(dontRender),
+			onClear: (index, dontRender) => this.clearSignupsButtonsColor(dontRender),
+			onPick: (index, color, dontRender) => this.setSignupsButtonsColor(color, dontRender),
+			reRender: () => this.send(),
+		});
+		this.signupsButtonColorPicker.active = false;
+
+		this.components = [this.backgroundColorPicker, this.buttonColorPicker, this.signupsBackgroundColorPicker,
+			this.signupsButtonColorPicker];
+
 		pages[this.userId] = this;
 	}
 
-	static loadData(): void {
-		if (this.loadedData) return;
-
-		const colors = Object.keys(Tools.hexCodes) as HexCode[];
-		for (const color of colors) {
-			if (Tools.hexCodes[color].category === 'light') {
-				this.lighterBackgroundColors.push(color);
-				this.lighterButtonColors.push(color);
-			} else if (Tools.hexCodes[color].category === 'dark') {
-				this.darkerBackgroundColors.push(color);
-				this.darkerButtonColors.push(color);
-			} else {
-				this.standardBackgroundColors.push(color);
-				this.standardButtonColors.push(color);
-			}
-		}
-
-		this.standardBackgroundColorsLength = this.standardBackgroundColors.length;
-		this.lighterBackgroundColorsLength = this.lighterBackgroundColors.length;
-		this.darkerBackgroundColorsLength = this.darkerBackgroundColors.length;
-
-		this.standardButtonColorsLength = this.standardButtonColors.length;
-		this.lighterButtonColorsLength = this.lighterButtonColors.length;
-		this.darkerButtonColorsLength = this.darkerButtonColors.length;
-
-		this.loadedData = true;
+	onClose(): void {
+		delete pages[this.userId];
 	}
 
-	close(): void {
-		delete pages[this.userId];
+	getDatabase(): IDatabase {
+		const database = Storage.getDatabase(this.room);
+		Storage.createGameScriptedBox(database, this.userId);
 
-		const user = Users.get(this.userId);
-		if (user) this.room.closeHtmlPage(user, this.pageId);
+		return database;
+	}
+
+	chooseBackgroundColorPicker(): void {
+		if (this.currentPicker === 'background') return;
+
+		this.backgroundColorPicker.active = true;
+		this.buttonColorPicker.active = false;
+		this.signupsBackgroundColorPicker.active = false;
+		this.signupsButtonColorPicker.active = false;
+		this.currentPicker = 'background';
+
+		this.send();
+	}
+
+	chooseButtonColorPicker(): void {
+		if (this.currentPicker === 'buttons') return;
+
+		this.buttonColorPicker.active = true;
+		this.backgroundColorPicker.active = false;
+		this.signupsBackgroundColorPicker.active = false;
+		this.signupsButtonColorPicker.active = false;
+		this.currentPicker = 'buttons';
+
+		this.send();
+	}
+
+	chooseSignupsBackgroundColorPicker(): void {
+		if (this.currentPicker === 'signups-background') return;
+
+		this.signupsBackgroundColorPicker.active = true;
+		this.backgroundColorPicker.active = false;
+		this.buttonColorPicker.active = false;
+		this.signupsButtonColorPicker.active = false;
+		this.currentPicker = 'signups-background';
+
+		this.send();
+	}
+
+	chooseSignupsButtonColorPicker(): void {
+		if (this.currentPicker === 'signups-buttons') return;
+
+		this.signupsButtonColorPicker.active = true;
+		this.backgroundColorPicker.active = false;
+		this.buttonColorPicker.active = false;
+		this.signupsBackgroundColorPicker.active = false;
+		this.currentPicker = 'signups-buttons';
+
+		this.send();
+	}
+
+	pickBackgroundHueVariation(dontRender?: boolean): void {
+		if (!dontRender) this.send();
+	}
+
+	pickBackgroundLightness(dontRender?: boolean): void {
+		if (!dontRender) this.send();
+	}
+
+	clearBackgroundColor(dontRender?: boolean): void {
+		const database = this.getDatabase();
+		delete database.gameScriptedBoxes![this.userId].background;
+
+		if (!dontRender) this.send();
+	}
+
+	setBackgroundColor(color: IColorPick, dontRender?: boolean): void {
+		const database = this.getDatabase();
+		database.gameScriptedBoxes![this.userId].background = color.hexCode;
+
+		if (!dontRender) this.send();
+	}
+
+	clearSignupsBackgroundColor(dontRender?: boolean): void {
+		const database = this.getDatabase();
+		delete database.gameScriptedBoxes![this.userId].signupsBackground;
+
+		if (!dontRender) this.send();
+	}
+
+	setSignupsBackgroundColor(color: IColorPick, dontRender?: boolean): void {
+		const database = this.getDatabase();
+		database.gameScriptedBoxes![this.userId].signupsBackground = color.hexCode;
+
+		if (!dontRender) this.send();
+	}
+
+	pickButtonHueVariation(dontRender?: boolean): void {
+		if (!dontRender) this.send();
+	}
+
+	pickButtonLightness(dontRender?: boolean): void {
+		if (!dontRender) this.send();
+	}
+
+	clearButtonsColor(dontRender?: boolean): void {
+		const database = this.getDatabase();
+		delete database.gameScriptedBoxes![this.userId].buttons;
+
+		if (!dontRender) this.send();
+	}
+
+	setButtonsColor(color: IColorPick, dontRender?: boolean): void {
+		const database = this.getDatabase();
+		database.gameScriptedBoxes![this.userId].buttons = color.hexCode;
+
+		if (!dontRender) this.send();
+	}
+
+	clearSignupsButtonsColor(dontRender?: boolean): void {
+		const database = this.getDatabase();
+		delete database.gameScriptedBoxes![this.userId].signupsButtons;
+
+		if (!dontRender) this.send();
+	}
+
+	setSignupsButtonsColor(color: IColorPick, dontRender?: boolean): void {
+		const database = this.getDatabase();
+		database.gameScriptedBoxes![this.userId].signupsButtons = color.hexCode;
+
+		if (!dontRender) this.send();
 	}
 
 	setGameFormat(format: IGameFormat): void {
+		if (this.gameFormat === format.inputTarget) return;
+
+		const database = this.getDatabase();
+		database.gameScriptedBoxes![this.userId].previewFormat = format.inputTarget;
+
 		this.gameFormat = format.inputTarget;
 
 		this.send();
 	}
 
-	standardBackgroundColors(): void {
-		this.backgroundColorType = 'standard';
-
-		this.send();
-	}
-
-	lighterBackgroundColors(): void {
-		this.backgroundColorType = 'lighter';
-
-		this.send();
-	}
-
-	darkerBackgroundColors(): void {
-		this.backgroundColorType = 'darker';
-
-		this.send();
-	}
-
-	standardButtonColors(): void {
-		this.buttonColorType = 'standard';
-
-		this.send();
-	}
-
-	lighterButtonColors(): void {
-		this.buttonColorType = 'lighter';
-
-		this.send();
-	}
-
-	darkerButtonColors(): void {
-		this.buttonColorType = 'darker';
-
-		this.send();
-	}
-
 	render(): string {
-		const database = Storage.getDatabase(this.room);
-		let scriptedBox: IGameScriptedBox | undefined;
-		if (database.gameScriptedBoxes && this.userId in database.gameScriptedBoxes) scriptedBox = database.gameScriptedBoxes[this.userId];
-
 		let name = this.userId;
 		const user = Users.get(this.userId);
 		if (user) name = user.name;
 
 		let html = "<div class='chat' style='margin-top: 4px;margin-left: 4px'><center><b>" + this.room.title + ": Game Scripted Box</b>";
-		html += "&nbsp;" + Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " + closeCommand,
-			"Close");
+		html += "&nbsp;" + Client.getPmSelfButton(this.commandPrefix + ", " + closeCommand, "Close");
 
 		const format = Games.getExistingFormat(this.gameFormat);
 		let mascot: IPokemon | undefined;
@@ -154,9 +261,24 @@ class GameScriptedBox extends HtmlPageBase {
 			mascot = Dex.getExistingPokemon(Tools.sampleOne(format.mascots));
 		}
 
-		html += "<br /><br /><div class='infobox'>";
+		html += "<br /><div class='infobox'>";
 		html += Games.getScriptedBoxHtml(this.room, format.name, name, format.description, mascot);
-		html += "</div></center><br /><br />";
+		html += "</div></center><br />";
+
+		const database = Storage.getDatabase(this.room);
+		let signupsBackgroundColor: string | undefined;
+		let signupsButtonColor: string | undefined;
+		if (database.gameScriptedBoxes && this.userId in database.gameScriptedBoxes) {
+			const box = database.gameScriptedBoxes[this.userId];
+			signupsBackgroundColor = box.signupsBackground || box.background;
+			signupsButtonColor = box.signupsButtons || box.buttons;
+		}
+
+		html += Games.getSignupsPlayersHtml(signupsBackgroundColor, (mascot ? Dex.getPokemonIcon(mascot) : '') + "<b>" +
+			format.nameWithOptions + " - signups</b>", 0, "");
+		html += "<br />";
+		html += Games.getJoinLeaveHtml(signupsButtonColor, false, this.room);
+		html += "<br />";
 
 		html += "<b>Game preview</b><br />";
 		html += "Choose a game to preview by PMing " + Users.self.name + " <code>" + Config.commandCharacter +
@@ -168,118 +290,43 @@ class GameScriptedBox extends HtmlPageBase {
 			this.room.title + ", [Pokemon]</code>";
 		html += "<br /><br />";
 
-		const standardBackgroundColors = this.backgroundColorType === 'standard';
-		const lighterBackgroundColors = this.backgroundColorType === 'lighter';
-		const darkerBackgroundColors = this.backgroundColorType === 'darker';
+		const background = this.currentPicker === 'background';
+		const buttons = this.currentPicker === 'buttons';
+		const signupsBackground = this.currentPicker === 'signups-background';
+		const signupsButtons = this.currentPicker === 'signups-buttons';
 
-		html += "<b>Background color</b><br />";
-		html += "Type:&nbsp;";
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			standardBackgroundColorsCommand, "Standard", standardBackgroundColors);
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			lighterBackgroundColorsCommand, "Lighter", lighterBackgroundColors);
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			darkerBackgroundColorsCommand, "Darker", darkerBackgroundColors);
+		html += Client.getPmSelfButton(this.commandPrefix + ", " + chooseBackgroundColorPicker, "Choose background",
+			background);
+		html += "&nbsp;" + Client.getPmSelfButton(this.commandPrefix + ", " + chooseButtonColorPicker, "Choose buttons",
+			buttons);
+		html += "&nbsp;" + Client.getPmSelfButton(this.commandPrefix + ", " + chooseSignupsBackgroundColorPicker,
+			"Choose signups background", signupsBackground);
+		html += "&nbsp;" + Client.getPmSelfButton(this.commandPrefix + ", " + chooseSignupsButtonColorPicker, "Choose signups buttons",
+			signupsButtons);
 		html += "<br /><br />";
 
-		let backgroundColors: HexCode[];
-		let totalBackgroundColors = 0;
-		if (standardBackgroundColors) {
-			backgroundColors = GameScriptedBox.standardBackgroundColors;
-			totalBackgroundColors = GameScriptedBox.standardBackgroundColorsLength;
-		} else if (lighterBackgroundColors) {
-			backgroundColors = GameScriptedBox.lighterBackgroundColors;
-			totalBackgroundColors = GameScriptedBox.lighterBackgroundColorsLength;
+		if (background) {
+			html += "<b>Background color</b><br />";
+			html += this.backgroundColorPicker.render();
+			html += "<br /><br />";
+		} else if (buttons) {
+			html += "<b>Buttons background color</b><br />";
+			html += this.buttonColorPicker.render();
+		} else if (signupsBackground) {
+			html += "<b>Signups background color</b><br />";
+			html += this.signupsBackgroundColorPicker.render();
 		} else {
-			backgroundColors = GameScriptedBox.darkerBackgroundColors;
-			totalBackgroundColors = GameScriptedBox.darkerBackgroundColorsLength;
-		}
-
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-				setBackgroundColorCommand + "," + noBackground, "None", !scriptedBox || !scriptedBox.background);
-
-		let backgroundColorsRowCount = 1;
-		for (let i = 0; i < totalBackgroundColors; i++) {
-			const color = backgroundColors[i];
-			const colorDiv = "<div style='background: " + Tools.hexCodes[color].gradient + ";height: 15px;width: 15px'>&nbsp;</div>";
-
-			if (backgroundColorsRowCount || i === 0) html += "&nbsp;";
-			html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-				setBackgroundColorCommand + "," + color, colorDiv, scriptedBox && scriptedBox.background === color);
-
-			backgroundColorsRowCount++;
-			if (backgroundColorsRowCount === backgroundColorsPerRow) {
-				html += "<br />";
-				backgroundColorsRowCount = 0;
-			}
-		}
-		html += "<br /><br />";
-
-		const standardButtonColors = this.buttonColorType === 'standard';
-		const lighterButtonColors = this.buttonColorType === 'lighter';
-		const darkerButtonColors = this.buttonColorType === 'darker';
-
-		html += "<b>Buttons background color</b><br />";
-		html += "Type:&nbsp;";
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			standardButtonColorsCommand, "Standard", standardButtonColors);
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			lighterButtonColorsCommand, "Lighter", lighterButtonColors);
-		html += "&nbsp;";
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			darkerButtonColorsCommand, "Darker", darkerButtonColors);
-		html += "<br /><br />";
-
-		let buttonColors: HexCode[];
-		let totalButtonColors = 0;
-		if (standardButtonColors) {
-			buttonColors = GameScriptedBox.standardButtonColors;
-			totalButtonColors = GameScriptedBox.standardButtonColorsLength;
-		} else if (lighterButtonColors) {
-			buttonColors = GameScriptedBox.lighterButtonColors;
-			totalButtonColors = GameScriptedBox.lighterButtonColorsLength;
-		} else {
-			buttonColors = GameScriptedBox.darkerButtonColors;
-			totalButtonColors = GameScriptedBox.darkerButtonColorsLength;
-		}
-
-		html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-			setButtonColorCommand + "," + noBackground, "None", !scriptedBox || !scriptedBox.buttons);
-
-		let buttonColorsRowCount = 1;
-		for (let i = 0; i < totalButtonColors; i++) {
-			const color = buttonColors[i];
-			const colorDiv = "<div style='background: " + Tools.hexCodes[color].color + ";height: 15px;width: 15px'>&nbsp;</div>";
-
-			if (buttonColorsRowCount || i === 0) html += "&nbsp;";
-			html += Client.getPmSelfButton(Config.commandCharacter + baseCommand + " " + this.room.title + ", " +
-				setButtonColorCommand + "," + color, colorDiv, scriptedBox && scriptedBox.buttons === color);
-
-			buttonColorsRowCount++;
-			if (buttonColorsRowCount === buttonColorsPerRow) {
-				html += "<br />";
-				buttonColorsRowCount = 0;
-			}
+			html += "<b>Signups buttons background color</b><br />";
+			html += this.signupsButtonColorPicker.render();
 		}
 
 		html += "</div>";
 		return html;
 	}
-
-	send(): void {
-		const user = Users.get(this.userId);
-		if (user) this.room.sendHtmlPage(user, this.pageId, this.render());
-	}
 }
 
 export const commands: BaseCommandDefinitions = {
 	[baseCommand]: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.isPm(room)) return;
 			const targets = target.split(",");
@@ -306,7 +353,7 @@ export const commands: BaseCommandDefinitions = {
 			const cmd = Tools.toId(targets[0]);
 			targets.shift();
 
-			if (!cmd || cmd === 'edit' || cmd === 'page') {
+			if (!cmd) {
 				new GameScriptedBox(targetRoom, user).open();
 			} else if (cmd === setGameFormatCommand || cmd === 'setgame') {
 				const format = Games.getFormat(targets.join(','));
@@ -341,74 +388,37 @@ export const commands: BaseCommandDefinitions = {
 
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
 				pages[user.id].send();
-			} else if (cmd === setBackgroundColorCommand || cmd === 'setbgcolor' || cmd === 'setbackground') {
-				const color = targets[0].trim();
-				const clear = color === noBackground;
-				if (!clear && !(color in Tools.hexCodes)) {
-					return this.say("'" + color + "' is not a valid background color.");
-				}
-
-				Storage.createGameScriptedBox(database, user.name);
-				if (clear) {
-					delete database.gameScriptedBoxes[user.id].background;
-				} else {
-					database.gameScriptedBoxes[user.id].background = color as HexCode;
-				}
-
+			} else if (cmd === chooseBackgroundColorPicker) {
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].send();
-			} else if (cmd === setButtonColorCommand || cmd === 'setbuttoncolor' || cmd === 'setbuttons' || cmd === 'setbutton') {
-				const color = targets[0].trim();
-				const clear = color === noBackground;
-				if (!clear && !(color in Tools.hexCodes)) {
-					return this.say("'" + color + "' is not a valid button color.");
-				}
-
-				Storage.createGameScriptedBox(database, user.name);
-				if (clear) {
-					delete database.gameScriptedBoxes[user.id].buttons;
-				} else {
-					database.gameScriptedBoxes[user.id].buttons = color as HexCode;
-				}
-
+				pages[user.id].chooseBackgroundColorPicker();
+			} else if (cmd === chooseButtonColorPicker) {
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].send();
-			} else if (cmd === standardBackgroundColorsCommand) {
+				pages[user.id].chooseButtonColorPicker();
+			} else if (cmd === chooseSignupsBackgroundColorPicker) {
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].standardBackgroundColors();
-			} else if (cmd === lighterBackgroundColorsCommand) {
+				pages[user.id].chooseSignupsBackgroundColorPicker();
+			} else if (cmd === chooseSignupsButtonColorPicker) {
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].lighterBackgroundColors();
-			} else if (cmd === darkerBackgroundColorsCommand) {
-				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].darkerBackgroundColors();
-			}  else if (cmd === standardButtonColorsCommand) {
-				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].standardButtonColors();
-			} else if (cmd === lighterButtonColorsCommand) {
-				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].lighterButtonColors();
-			} else if (cmd === darkerButtonColorsCommand) {
-				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
-				pages[user.id].darkerButtonColors();
+				pages[user.id].chooseSignupsButtonColorPicker();
 			} else if (cmd === closeCommand) {
 				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
 				pages[user.id].close();
+				delete pages[user.id];
 			} else {
-				this.say("Unknown sub-command '" + cmd + "'.");
+				if (!(user.id in pages)) new GameScriptedBox(targetRoom, user);
+				const error = pages[user.id].checkComponentCommands(cmd, targets);
+				if (error) this.say(error);
 			}
 		},
 		aliases: ['gsb'],
 	},
 	[setGameFormatSeparateCommand]: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target) {
 			const targets = target.split(',');
 			this.run(baseCommand, targets[0] + "," + setGameFormatCommand + "," + targets.slice(1).join(","));
 		},
 	},
 	[setPokemonSeparateCommand]: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target) {
 			const targets = target.split(',');
 			this.run(baseCommand, targets[0] + "," + setPokemonCommand + "," + targets.slice(1).join(","));

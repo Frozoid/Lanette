@@ -52,7 +52,7 @@ class LandorusWar extends ScriptedGame {
 
 	onStart(): void {
 		this.say("Now handing out Pokemon!");
-		const aliases = this.sampleMany(Dex.data.trainerClasses, this.getRemainingPlayerCount());
+		const aliases = this.sampleMany(Dex.getData().trainerClasses, this.getRemainingPlayerCount());
 		const pokemonList = this.shuffle(data.pokemon);
 		const playerAliases: string[] = [];
 		const playerPokemon: string[] = [];
@@ -151,7 +151,6 @@ class LandorusWar extends ScriptedGame {
 
 const commands: GameCommandDefinitions<LandorusWar> = {
 	use: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			const player = this.players[user.id];
 			if (this.roundMoves.has(player)) {
@@ -182,10 +181,11 @@ const commands: GameCommandDefinitions<LandorusWar> = {
 			}
 
 			const alias = targets.slice(1).join(",");
-			if (alias === Tools.toId(this.playerAliases.get(player))) {
+			if (Tools.toId(alias) === Tools.toId(this.playerAliases.get(player))) {
 				player.say("You cannot use a move on yourself!");
 				return false;
 			}
+
 			const attackedPlayer = this.getPlayerByAlias(alias, player);
 			if (!attackedPlayer) {
 				player.say("'" + alias + "' is not a trainer class in this game.");
@@ -215,7 +215,6 @@ const commands: GameCommandDefinitions<LandorusWar> = {
 		pmGameCommand: true,
 	},
 	suspect: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			const player = this.players[user.id];
 			if (this.roundSuspects.has(player)) {
@@ -230,11 +229,12 @@ const commands: GameCommandDefinitions<LandorusWar> = {
 			}
 
 			const alias = targets[0];
-			const targetPlayer = this.getPlayerByAlias(alias, player);
-			if (alias === Tools.toId(this.playerAliases.get(player))) {
+			if (Tools.toId(alias) === Tools.toId(this.playerAliases.get(player))) {
 				player.say("You cannot suspect yourself!");
 				return false;
 			}
+
+			const targetPlayer = this.getPlayerByAlias(alias, player);
 			if (!targetPlayer) {
 				player.say("'" + alias + "' is not a trainer class in this game.");
 				return false;
@@ -287,12 +287,11 @@ const commands: GameCommandDefinitions<LandorusWar> = {
 		pmGameCommand: true,
 	},
 };
-commands.summary = Tools.deepClone(Games.sharedCommands.summary);
+commands.summary = Tools.deepClone(Games.getSharedCommands().summary);
 commands.summary.aliases = ['role'];
 
 const tests: GameFileTests<LandorusWar> = {
 	'it should properly assign aliases and create decoys': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			addPlayers(game, 4);
 			game.start();
@@ -305,13 +304,14 @@ const tests: GameFileTests<LandorusWar> = {
 
 export const game: IGameFile<LandorusWar> = {
 	aliases: ['landorus', 'lw'],
-	category: 'strategy',
+	category: 'puzzle',
 	class: LandorusWar,
 	commandDescriptions: [Config.commandCharacter + "use [move], [trainer]", Config.commandCharacter + "suspect [trainer], [Pokemon]"],
 	commands,
 	description: "Players try to identify the randomly chosen Pokemon of other players by using moves against them to discover their " +
 		"type. Players may only use moves of which the Pokemon they have been randomly assigned to is able to learn.",
 	name: "Landorus' War",
+	nonTrivialLoadData: true,
 	mascot: "Landorus",
 	scriptedOnly: true,
 	tests,

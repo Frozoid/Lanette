@@ -29,6 +29,7 @@ class ZygardesOrders extends QuestionAndAnswer {
 	letters: string[] = [];
 	maxRevealedLetters: number | undefined;
 	multiRoundHints = true;
+	oneGuessPerHint = true;
 	orderRound: number = 0;
 	revealedLetters: number = 0;
 	roundGuesses = new Map<Player, boolean>();
@@ -133,7 +134,10 @@ class ZygardesOrders extends QuestionAndAnswer {
 
 export const game: IGameFile<ZygardesOrders> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ["zygardes", "zo"],
-	category: 'identification',
+	botChallenge: {
+		enabled: false,
+	},
+	category: 'identification-2',
 	class: ZygardesOrders,
 	defaultOptions: ['points'],
 	description: "Players guess answers as letters are revealed one by one (one guess per round)!",

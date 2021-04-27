@@ -156,7 +156,7 @@ class TrubbishsTrash extends ScriptedGame {
 			const player = this.players[i];
 			const points = this.points.get(player);
 			if (points && points >= this.maxPoints) {
-				this.winners.set(player, 1);
+				this.winners.set(player, points);
 				if (this.firstTrash === player) this.unlockAchievement(player, TrubbishsTrash.achievements.garbagecollector);
 				if (this.weakestTrash === player) this.unlockAchievement(player, TrubbishsTrash.achievements.technician);
 			}
@@ -169,7 +169,6 @@ class TrubbishsTrash extends ScriptedGame {
 
 const commands: GameCommandDefinitions<TrubbishsTrash> = {
 	trash: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canTrash) return false;
 			const player = this.createPlayer(user) || this.players[user.id];

@@ -1,9 +1,12 @@
+import type { IPokemonPick } from "./html-pages/components/pokemon-picker-base";
+import type { ITrainerPick } from "./html-pages/components/trainer-picker";
 import type { PRNGSeed } from "./lib/prng";
 import type { Player } from "./room-activity";
 import { Activity, PlayerTeam } from "./room-activity";
 import type { Room } from "./rooms";
-import type { IGameFormat, IPokemonUhtml, ITrainerUhtml, IUserHostedFormat, PlayerList } from "./types/games";
+import type { IGameFormat, IHostDisplayUhtml, IPokemonUhtml, ITrainerUhtml, IUserHostedFormat, PlayerList } from "./types/games";
 import type { IPokemon, IPokemonCopy } from "./types/pokemon-showdown";
+import type { HexCode } from "./types/tools";
 import type { User } from "./users";
 
 const teamNameLists: Dict<string[][]> = {
@@ -18,7 +21,9 @@ const teamNameLists: Dict<string[][]> = {
 
 export abstract class Game extends Activity {
 	readonly activityType: string = 'game';
+	joinNotices = new Set<string>();
 	largestTeam: PlayerTeam | null = null;
+	leaveNotices = new Set<string>();
 	minPlayers: number = 4;
 	playerOrders: Dict<Player[]> | null = null;
 	readonly round: number = 0;
@@ -31,8 +36,13 @@ export abstract class Game extends Activity {
 	description!: string;
 	signupsUhtmlName!: string;
 	joinLeaveButtonUhtmlName!: string;
+	joinLeaveButtonRefreshUhtmlName!: string;
 
+	customBackgroundColor?: string;
+	customButtonColor?: string;
 	format?: IGameFormat | IUserHostedFormat;
+	isUserHosted?: boolean;
+	lastHostDisplayUhtml?: IHostDisplayUhtml;
 	lastPokemonUhtml?: IPokemonUhtml;
 	lastTrainerUhtml?: ITrainerUhtml;
 	mascot?: IPokemonCopy;
@@ -49,6 +59,14 @@ export abstract class Game extends Activity {
 	abstract getMascotAndNameHtml(additionalText?: string): string;
 	abstract onInitialize(format: IGameFormat | IUserHostedFormat): void;
 
+	getSignupsEndMessage(): string {
+		return "<center>(signups have closed)</center>";
+	}
+
+	getSignupsUpdateDelay(): number {
+		return Client.getSendThrottle() * 4;
+	}
+
 	rollForShinyPokemon(extraChance?: number): boolean {
 		let chance = 150;
 		if (extraChance) chance -= extraChance;
@@ -58,9 +76,10 @@ export abstract class Game extends Activity {
 	initialize(format: IGameFormat | IUserHostedFormat): void {
 		this.name = format.nameWithOptions || format.name;
 		this.id = format.id;
-		this.description = format.description;
 
 		this.onInitialize(format);
+		this.description = format.description;
+
 		if (this.maxPlayers) this.playerCap = this.maxPlayers;
 	}
 
@@ -69,6 +88,25 @@ export abstract class Game extends Activity {
 
 		const numberOfWinners = this.winners.size;
 		if (numberOfWinners) {
+			if (this.isUserHosted) {
+				if (Config.onUserHostedGameWin) {
+					try {
+						Config.onUserHostedGameWin(this.room as Room, this.format as IUserHostedFormat, this.players, this.winners,
+							this.points);
+					} catch (e) {
+						Tools.logError(e, this.format!.name + " Config.onUserHostedGameWin");
+					}
+				}
+			} else if (!this.isPm(this.room)) {
+				if (Config.onScriptedGameWin) {
+					try {
+						Config.onScriptedGameWin(this.room, this.format as IGameFormat, this.players, this.winners, this.points);
+					} catch (e) {
+						Tools.logError(e, this.format!.name + " Config.onScriptedGameWin");
+					}
+				}
+			}
+
 			let trainerCardsShown = false;
 			if (!this.isPm(this.room) && Config.showGameTrainerCards && Config.showGameTrainerCards.includes(this.room.id)) {
 				const trainerCards: string[] = [];
@@ -120,9 +158,59 @@ export abstract class Game extends Activity {
 		return this.description;
 	}
 
-	getSignupsHtmlUpdate(): string {
-		return "<div class='infobox'>" + this.getMascotAndNameHtml(" - signups (join with " + Config.commandCharacter + "joingame!)") +
-			"<br /><br /><b>Players (" + this.playerCount + ")</b>: " + this.getPlayerNames() + "</div>";
+	getSignupsPlayersHtml(): string {
+		return Games.getSignupsPlayersHtml(this.customBackgroundColor, this.getMascotAndNameHtml(" - signups"), this.playerCount,
+			this.getPlayerNames());
+	}
+
+	getJoinLeaveHtml(freejoin: boolean): string {
+		return Games.getJoinLeaveHtml(this.customButtonColor, freejoin, this.room as Room);
+	}
+
+	sayHostDisplayUhtml(user: User, backgroundColor: HexCode | undefined, trainerChoices: ITrainerPick[], pokemonChoices: IPokemonPick[],
+		pokemonIcons: boolean): void {
+		const uhtmlName = this.uhtmlBaseName + "-" + this.round + "-hostdisplay";
+
+		if (this.lastHostDisplayUhtml && this.lastHostDisplayUhtml.uhtmlName !== uhtmlName) {
+			let lastHtml = "<div class='infobox'>";
+			if (this.lastHostDisplayUhtml.trainers.length) {
+				lastHtml += "<center>(trainer" + (this.lastHostDisplayUhtml.trainers.length > 1 ? "s" : "") + ": " +
+					this.lastHostDisplayUhtml.trainers.map(x => x.trainer).join(", ") + ")</center>";
+			}
+
+			if (this.lastHostDisplayUhtml.pokemon.length) {
+				lastHtml += "<center>";
+				if (this.lastHostDisplayUhtml.pokemonType === 'gif') {
+					lastHtml += "(gif" + (this.lastHostDisplayUhtml.pokemon.length > 1 ? "s" : "") + ": " +
+						this.lastHostDisplayUhtml.pokemon.map(x => x.pokemon).join(", ") + ")";
+				} else {
+					lastHtml += "(icon" + (this.lastHostDisplayUhtml.pokemon.length > 1 ? "s" : "") + ": " +
+						this.lastHostDisplayUhtml.pokemon.map(x => x.pokemon).join(", ") + ")";
+				}
+				lastHtml += "</center>";
+			}
+
+			lastHtml += Client.getUserAttributionHtml(this.lastHostDisplayUhtml.user);
+
+			lastHtml += "</div>";
+
+			this.sayUhtmlChange(this.lastHostDisplayUhtml.uhtmlName, lastHtml);
+			this.lastHostDisplayUhtml = undefined;
+		}
+
+		const html = Games.getHostCustomDisplay(user.name, backgroundColor, trainerChoices, pokemonChoices, pokemonIcons);
+		if (this.lastHostDisplayUhtml && this.lastHostDisplayUhtml.html === html) return;
+
+		this.sayUhtmlAuto(uhtmlName, html);
+
+		this.lastHostDisplayUhtml = {
+			html,
+			pokemon: pokemonChoices,
+			trainers: trainerChoices,
+			pokemonType: pokemonIcons ? 'icon' : 'gif',
+			uhtmlName,
+			user: user.name,
+		};
 	}
 
 	sayPokemonUhtml(pokemon: IPokemon[], type: 'gif' | 'icon', uhtmlName: string, html: string, user: User): void {
@@ -136,8 +224,7 @@ export abstract class Game extends Activity {
 					this.lastPokemonUhtml.pokemon.join(", ") + ")";
 			}
 
-			lastHtml += '<div style="float:right;color:#888;font-size:8pt">[' + this.lastPokemonUhtml.user + ']</div>' +
-				'<div style="clear:both"></div>';
+			lastHtml += Client.getUserAttributionHtml(this.lastPokemonUhtml.user);
 
 			lastHtml += "</div>";
 
@@ -158,8 +245,7 @@ export abstract class Game extends Activity {
 			let lastHtml = "<div class='infobox'><center>(trainer" + (this.lastTrainerUhtml.trainerList.length > 1 ? "s" : "") + ": " +
 				this.lastTrainerUhtml.trainerList.join(", ") + ")</center>";
 
-			lastHtml += '<div style="float:right;color:#888;font-size:8pt">[' + this.lastTrainerUhtml.user + ']</div>' +
-				'<div style="clear:both"></div>';
+				lastHtml += Client.getUserAttributionHtml(this.lastTrainerUhtml.user);
 
 			lastHtml += "</div>";
 

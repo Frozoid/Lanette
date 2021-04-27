@@ -1,7 +1,7 @@
 import type { PRNGSeed } from "../lib/prng";
 import { PRNG } from "../lib/prng";
 import { assert, assertStrictEqual } from '../test/test-tools';
-import type { GameFileTests, IGameFile, IGameFormat } from "../types/games";
+import type { GameFileTests, IGameFile } from "../types/games";
 import type { PoolType } from './../workers/portmanteaus';
 import { game as questionAndAnswerGame, QuestionAndAnswer } from './templates/question-and-answer';
 
@@ -19,15 +19,7 @@ export class PoliwrathsPortmanteaus extends QuestionAndAnswer {
 	usesWorkers: boolean = true;
 
 	static loadData(): void {
-		Games.workers.portmanteaus.init();
-	}
-
-	onInitialize(format: IGameFormat): void {
-		super.onInitialize(format);
-
-		if (format.mode) {
-			if (format.mode.id === 'team') this.roundTime = 60 * 1000;
-		}
+		Games.getWorkers().portmanteaus.init();
 	}
 
 	async generateAnswer(): Promise<void> {
@@ -42,7 +34,7 @@ export class PoliwrathsPortmanteaus extends QuestionAndAnswer {
 				numberOfPorts += this.random(this.format.customizableOptions.ports.max - BASE_NUMBER_OF_PORTS + 1);
 			}
 		}
-		const result = await Games.workers.portmanteaus.search({
+		const result = await Games.getWorkers().portmanteaus.search({
 			customPortCategories: this.customPortCategories,
 			customPortDetails: this.customPortDetails,
 			customPortTypes: this.customPortTypes,
@@ -72,8 +64,12 @@ export class PoliwrathsPortmanteaus extends QuestionAndAnswer {
 		}
 	}
 
-	getAnswers(givenAnswer?: string): string[] {
-		if (!givenAnswer) givenAnswer = this.answers[0];
+	getAnswers(givenAnswer?: string): readonly string[] {
+		if (!givenAnswer) {
+			if (!this.answers.length) return [];
+			givenAnswer = this.answers[0];
+		}
+
 		return [givenAnswer.charAt(0).toUpperCase() + givenAnswer.substr(1) + " (" + this.answerParts[givenAnswer].join(" + ") + ")"];
 	}
 
@@ -150,6 +146,9 @@ const tests: GameFileTests<PoliwrathsPortmanteaus> = {
 
 export const game: IGameFile<PoliwrathsPortmanteaus> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ['poliwraths', 'ports'],
+	botChallenge: Object.assign({}, questionAndAnswerGame.botChallenge, {
+		points: 5,
+	}),
 	canGetRandomAnswer: false,
 	category: 'puzzle',
 	challengePoints: {
@@ -171,5 +170,10 @@ export const game: IGameFile<PoliwrathsPortmanteaus> = Games.copyTemplatePropert
 	minigameDescription: "Use <code>" + Config.commandCharacter + "g</code> to guess a portmanteau (sharing 2-4 letters) that fits the " +
 		"given parameters!",
 	modes: ['team'],
+	modeProperties: {
+		'team': {
+			roundTime: 60 * 1000,
+		},
+	},
 	tests: Object.assign({}, questionAndAnswerGame.tests, tests),
 });

@@ -21,23 +21,25 @@ class PoipolesRegionalPortals extends ScriptedGame {
 	maxTravelersPerRound: number = 0;
 	points = new Map<Player, number>();
 	roundLocations: string[] = [];
+	roundTime: number = 20 * 1000;
 	roundTravels = new Set<Player>();
 	winnerPointsToBits: number = 25;
 
 	static loadData(): void {
-		for (const region of Dex.regions) {
-			const types = Object.keys(Dex.data.locations[region]) as LocationType[];
-			const locations: PartialKeyedDict<LocationType, string[]> = {};
+		const locations = Dex.getData().locations;
+		for (const region of Dex.getRegions()) {
+			const types = Object.keys(locations[region]) as LocationType[];
+			const regionLocations: PartialKeyedDict<LocationType, string[]> = {};
 			for (const type of types) {
-				for (const location of Dex.data.locations[region][type]) {
-					if (!(type in locations)) locations[type] = [];
-					locations[type]!.push(Tools.toId(location));
+				for (const location of locations[region][type]) {
+					if (!(type in regionLocations)) regionLocations[type] = [];
+					regionLocations[type]!.push(Tools.toId(location));
 				}
 			}
 
-			const typesWithLocations = Object.keys(locations) as LocationType[];
+			const typesWithLocations = Object.keys(regionLocations) as LocationType[];
 			if (typesWithLocations.length) {
-				data.regions[region] = locations;
+				data.regions[region] = regionLocations;
 				regionKeys.push(region);
 				regionTypeKeys[region] = typesWithLocations;
 			}
@@ -72,7 +74,7 @@ class PoipolesRegionalPortals extends ScriptedGame {
 		let reachedCap = false;
 		this.points.forEach((points, player) => {
 			if (points >= this.format.options.points) {
-				this.winners.set(player, 1);
+				this.winners.set(player, points);
 				if (!reachedCap) reachedCap = true;
 			}
 		});
@@ -95,22 +97,25 @@ class PoipolesRegionalPortals extends ScriptedGame {
 		this.lastType = type;
 
 		this.roundLocations = data.regions[region][type]!.slice();
+		this.roundTravels.clear();
+
 		if (this.roundLocations.length < this.baseTravelersPerRound) {
 			this.maxTravelersPerRound = this.roundLocations.length;
 		} else {
 			this.maxTravelersPerRound = this.baseTravelersPerRound;
 		}
-		this.roundTravels.clear();
+		if (this.inheritedPlayers && this.maxTravelersPerRound > this.playerCount) this.maxTravelersPerRound = this.playerCount;
 
 		const html = this.getRoundHtml(players => this.getPlayerPoints(players));
 		const uhtmlName = this.uhtmlBaseName + '-round-html';
 		this.onUhtml(uhtmlName, html, () => {
 			this.timeout = setTimeout(() => {
-				const text = "Poipole opened a portal to a **" + Dex.locationTypeNames[type] + " location** in " +
-					"**" + Dex.regionNames[region] + "**!";
+				const text = "Poipole opened a portal to a **" + Dex.getLocationTypeNames()[type] + " location** in " +
+					"**" + Dex.getRegionNames()[region] + "**!";
 				this.on(text, () => {
 					this.canTravel = true;
-					this.timeout = setTimeout(() => this.nextRound(), 20 * 1000);
+					if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint("", this.roundLocations, true);
+					this.timeout = setTimeout(() => this.nextRound(), this.roundTime);
 				});
 				this.say(text);
 			}, 5000);
@@ -122,11 +127,22 @@ class PoipolesRegionalPortals extends ScriptedGame {
 		this.convertPointsToBits();
 		this.announceWinners();
 	}
+
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			const command = "travel";
+			const answer = this.sampleOne(this.roundLocations).toLowerCase();
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
 }
 
 const commands: GameCommandDefinitions<PoipolesRegionalPortals> = {
 	travel: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canTravel) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -157,7 +173,11 @@ const commands: GameCommandDefinitions<PoipolesRegionalPortals> = {
 
 export const game: IGameFile<PoipolesRegionalPortals> = {
 	aliases: ["poipoles", "prp", "regionalportals", "portals"],
-	category: 'knowledge',
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+	},
+	category: 'knowledge-2',
 	commandDescriptions: [Config.commandCharacter + "travel [location]"],
 	commands,
 	class: PoipolesRegionalPortals,

@@ -1,6 +1,8 @@
 import type { Player } from '../../room-activity';
 import { ScriptedGame } from '../../room-game-scripted';
+import type { Room } from '../../rooms';
 import { assert, assertStrictEqual } from '../../test/test-tools';
+import type { ModelGeneration } from '../../types/dex';
 import type { GameCommandDefinitions, GameFileTests, IGameTemplateFile, PlayerList } from '../../types/games';
 import type { IItem, IMove, IPokemon, StatsTable } from '../../types/pokemon-showdown';
 
@@ -12,6 +14,7 @@ export interface IActionCardData<T extends ScriptedGame = ScriptedGame, U extend
 	readonly description: string;
 	readonly name: string;
 	drawCards?: number;
+	readonly noOldGen?: boolean;
 	readonly requiredTarget?: boolean;
 	skipPlayers?: number;
 }
@@ -70,7 +73,11 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 	usesActionCards: boolean = true;
 	usesHtmlPage = true;
 
+	room!: Room;
+
+	gifGeneration?: ModelGeneration;
 	lives?: Map<Player, number>;
+	requiredGen?: number;
 	startingLives?: number;
 	topCard?: ICard;
 
@@ -79,6 +86,29 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 	abstract getCardsPmHtml(cards: ICard[], player?: Player, playableCards?: boolean): string;
 	abstract onNextRound(): void;
 	abstract onStart(): void;
+
+	onSignups(): void {
+		if (this.requiredGen) {
+			if (this.requiredGen === 1) {
+				this.gifGeneration = 'rb';
+			} else if (this.requiredGen === 2) {
+				this.gifGeneration = 'gs';
+			} else if (this.requiredGen === 3) {
+				this.gifGeneration = 'rs';
+			} else if (this.requiredGen === 4) {
+				this.gifGeneration = 'dp';
+			} else if (this.requiredGen === 5) {
+				this.gifGeneration = 'bw';
+			}
+		} else {
+			this.gifGeneration = 'xy';
+		}
+	}
+
+	getDex(): typeof Dex {
+		if (this.requiredGen) return Dex.getDex("gen" + this.requiredGen);
+		return Dex;
+	}
 
 	isMoveCard(card: ICard): card is IMoveCard {
 		return card.effectType === 'move';
@@ -148,14 +178,14 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 
 	filterPokemonList(pokemon: IPokemon): boolean {
 		if ((pokemon.forme && (!this.filterForme || !this.filterForme(pokemon))) ||
-			(this.usesActionCards && pokemon.id in this.actionCards) || !Dex.hasGifData(pokemon) ||
+			(this.usesActionCards && pokemon.id in this.actionCards) || !Dex.hasModelData(pokemon, this.gifGeneration) ||
 			(this.filterPoolItem && !this.filterPoolItem(pokemon))) return false;
 		return true;
 	}
 
 	createDeckPool(): void {
 		this.deckPool = [];
-		const pokemonList = Games.getPokemonList(pokemon => this.filterPokemonList(pokemon));
+		const pokemonList = Games.getPokemonList(pokemon => this.filterPokemonList(pokemon), this.requiredGen);
 		for (const pokemon of pokemonList) {
 			const color = Tools.toId(pokemon.color);
 			if (!(color in this.colors)) this.colors[color] = pokemon.color;
@@ -235,7 +265,7 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 	getEggGroupLabel(card: IPokemonCard): string {
 		const eggGroups = [];
 		for (const eggGroup of card.eggGroups) {
-			const colorData = Tools.getEggGroupHexCode(eggGroup);
+			const colorData = Tools.getEggGroupHexCode(eggGroup)!;
 			eggGroups.push('<div style="display:inline-block;background-color:' + colorData.color + ';background:' +
 				colorData.gradient + ';border: 1px solid #a99890;border-radius:3px;width:' + this.detailLabelWidth + 'px;' +
 				'padding:1px;color:#fff;text-shadow:1px 1px 1px #333;text-transform: uppercase;font-size:8pt;text-align:center"><b>' +
@@ -245,7 +275,7 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 	}
 
 	getChatColorLabel(card: IPokemonCard): string {
-		const colorData = Tools.getPokemonColorHexCode(card.color);
+		const colorData = Tools.getPokemonColorHexCode(card.color)!;
 		return '<div style="display:inline-block;background-color:' + colorData.color + ';background:' +
 			colorData.gradient + ';border: 1px solid #a99890;border-radius:3px;width:' + this.detailLabelWidth + 'px;padding:1px;' +
 			'color:#fff;text-shadow:1px 1px 1px #333;text-transform: uppercase;font-size:8pt;text-align:center"><b>' + card.color +
@@ -258,12 +288,13 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 		let width = 0;
 		const names: string[] = [];
 		const images: string[] = [];
+		const dex = this.getDex();
 		let info = '';
 		for (const card of cards) {
 			let image = '';
 			if (this.isMoveCard(card)) {
 				names.push(card.name);
-				const colorData = Tools.getTypeHexCode(card.type);
+				const colorData = Tools.getTypeHexCode(card.type)!;
 				image = '<div style="display:inline-block;height:51px;width:' + (this.detailLabelWidth + 10) + '"><br /><div ' +
 					'style="display:inline-block;background-color:' + colorData.color + ';background:' +
 					colorData.gradient + ';border: 1px solid #a99890;border-radius:3px;width:' + this.detailLabelWidth + 'px;' +
@@ -273,13 +304,16 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 			} else {
 				const shinyPokemon = (card as IPokemonCard).shiny;
 				names.push(card.name + (shinyPokemon ? ' \u2605' : ''));
-				image = Dex.getPokemonGif(Dex.getExistingPokemon(card.name), undefined, undefined, shinyPokemon);
-				width += Dex.data.gifData[card.id]!.front!.w;
+				const pokemon = dex.getExistingPokemon(card.name);
+				image = Dex.getPokemonModel(pokemon, shinyPokemon && this.gifGeneration === 'rb' ? 'gs' : this.gifGeneration, undefined,
+					shinyPokemon);
+				width += Dex.getModelData(pokemon, this.gifGeneration)!.w;
 			}
 
 			images.push(image);
 			if (!info) info = this.getCardChatDetails(card);
 		}
+
 		width *= 1.5;
 		if (width < 250) width = 250;
 		html += '<div class="infobox" style="width:' + (width + 10) + 'px;"><div class="infobox" style="width:' +
@@ -422,12 +456,11 @@ export abstract class Card<ActionCardsType = Dict<IActionCardData>> extends Scri
 }
 
 const commands: GameCommandDefinitions<Card> = {};
-commands.summary = Tools.deepClone(Games.sharedCommands.summary);
+commands.summary = Tools.deepClone(Games.getSharedCommands().summary);
 commands.summary.aliases = ['cards', 'hand'];
 
 const tests: GameFileTests<Card> = {
 	'it should have all required card properties': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const tackle = Dex.getExistingMove("Tackle");
 			const moveCard = game.moveToCard(tackle, Dex.getMoveAvailability(tackle));
@@ -453,6 +486,7 @@ const tests: GameFileTests<Card> = {
 };
 
 export const game: IGameTemplateFile<Card> = {
+	category: 'tabletop',
 	commands,
 	defaultOptions: ['cards'],
 	tests,

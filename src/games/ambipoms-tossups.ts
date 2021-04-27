@@ -21,6 +21,7 @@ class AmbipomsTossups extends QuestionAndAnswer {
 	letters: string[] = [];
 	maxRevealedLetters: number | undefined;
 	multiRoundHints = true;
+	oneGuessPerHint = true;
 	revealedLetters: number = 0;
 	readonly roundGuesses = new Map<Player, boolean>();
 	roundTime = 0;
@@ -108,7 +109,10 @@ class AmbipomsTossups extends QuestionAndAnswer {
 
 export const game: IGameFile<AmbipomsTossups> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ['ambipoms', 'at'],
-	category: 'identification',
+	botChallenge: {
+		enabled: false,
+	},
+	category: 'identification-2',
 	class: AmbipomsTossups,
 	defaultOptions: ['points'],
 	description: "Players guess answers as blanks are filled in one by one (one guess per round)!",

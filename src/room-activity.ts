@@ -42,31 +42,45 @@ export class Player {
 	}
 
 	say(message: string): void {
+		if (this.id === Users.self.id) return;
+
 		const user = Users.get(this.name);
 		if (user) user.say(message);
 	}
 
 	sayHtml(html: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.pmHtml(this, html);
 	}
 
 	sayUhtml(html: string, name?: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.pmUhtml(this, name || this.activity.uhtmlBaseName, html);
 	}
 
 	sayUhtmlChange(html: string, name?: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.pmUhtmlChange(this, name || this.activity.uhtmlBaseName, html);
 	}
 
 	sendHtmlPage(html: string, pageId?: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.sendHtmlPage(this, pageId || this.activity.baseHtmlPageId, this.activity.getHtmlPageWithHeader(html));
 	}
 
 	closeHtmlPage(pageId?: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.closeHtmlPage(this, pageId || this.activity.baseHtmlPageId);
 	}
 
 	sendHighlightPage(notificationTitle: string, pageId?: string, highlightPhrase?: string): void {
+		if (this.id === Users.self.id) return;
+
 		this.activity.pmRoom.sendHighlightPage(this, pageId || this.activity.baseHtmlPageId, notificationTitle, highlightPhrase);
 	}
 
@@ -141,7 +155,7 @@ export abstract class Activity {
 	signupsHtmlTimeout: NodeJS.Timer | null = null;
 	started: boolean = false;
 	startTime: number | null = null;
-	startTimer?: NodeJS.Timer;
+	startTimer: NodeJS.Timer | null = null;
 	timeout: NodeJS.Timer | null = null;
 	uhtmlMessageListeners: Dict<string[]> = {};
 
@@ -282,10 +296,6 @@ export abstract class Activity {
 		this.room.say(message);
 	}
 
-	sayCommand(command: string, dontCheckFilter?: boolean): void {
-		this.room.sayCommand(command, dontCheckFilter);
-	}
-
 	sayHtml(html: string): void {
 		if (this.isPm(this.room)) return this.pmRoom.pmHtml(this.room, html);
 		this.room.sayHtml(html);
@@ -367,7 +377,7 @@ export abstract class Activity {
 	}
 
 	getPlayerList(players?: PlayerList, fromGetRemainingPlayers?: boolean): Player[] {
-		if (Array.isArray(players)) return players;
+		if (Array.isArray(players)) return players as Player[];
 
 		if (!players) {
 			if (this.started && !fromGetRemainingPlayers) {

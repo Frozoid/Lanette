@@ -3,17 +3,14 @@ import path = require('path');
 
 import type { Room } from './rooms';
 import type {
-	ICachedLeaderboardEntry, IDatabase, IGlobalDatabase, ILeaderboard,
-	ILeaderboardEntry, IOfflineMessage, LeaderboardType
+	ICachedLeaderboardEntry, IDatabase, IGlobalDatabase, ILeaderboard, ILeaderboardEntry, LeaderboardType
 } from './types/storage';
 import type { User } from './users';
 
 const MAX_QUEUED_OFFLINE_MESSAGES = 3;
 const LAST_SEEN_EXPIRATION = 30 * 24 * 60 * 60 * 1000;
-const OFFLINE_MESSAGE_EXPIRATION = 30 * 24 * 60 * 60 * 1000;
 
 const globalDatabaseId = 'globalDB';
-const baseOfflineMessageLength = '[28 Jun 2019, 00:00:00 GMT-0500] **** said: '.length;
 
 export class Storage {
 	gameLeaderboard = 'gameLeaderboard' as const;
@@ -22,6 +19,7 @@ export class Storage {
 	unsortedLeaderboard = 'unsortedLeaderboard' as const;
 
 	databasesDir: string = path.join(Tools.rootFolder, 'databases');
+	lastExportedDatabaseContents: Dict<string> = {};
 	lastSeenExpirationDuration = Tools.toDurationString(LAST_SEEN_EXPIRATION);
 	leaderboardsAnnualPointsCache: Dict<PartialKeyedDict<LeaderboardType, ICachedLeaderboardEntry[]>> = {};
 	leaderboardsAnnualSourcePointsCache: Dict<PartialKeyedDict<LeaderboardType, Dict<ICachedLeaderboardEntry[]>>> = {};
@@ -38,12 +36,13 @@ export class Storage {
 	constructor() {
 		this.allLeaderboardTypes = [this.gameLeaderboard, this.gameHostingLeaderboard, this.tournamentLeaderboard,
 			this.unsortedLeaderboard];
-		this.globalDatabaseExportInterval = setInterval(() => this.exportDatabase(globalDatabaseId), 15 * 60 * 1000);
+		this.globalDatabaseExportInterval = setInterval(() => this.exportGlobalDatabase(), 15 * 60 * 1000);
 	}
 
 	onReload(previous: Partial<Storage>): void {
 		// @ts-expect-error
 		if (previous.databases) Object.assign(this.databases, previous.databases);
+		if (previous.lastExportedDatabaseContents) Object.assign(this.lastExportedDatabaseContents, previous.lastExportedDatabaseContents);
 		for (const id in this.databases) {
 			this.updateLeaderboardCaches(id, this.databases[id]);
 		}
@@ -68,9 +67,17 @@ export class Storage {
 		return this.databases[globalDatabaseId] as IGlobalDatabase;
 	}
 
+	exportGlobalDatabase(): void {
+		this.exportDatabase(globalDatabaseId);
+	}
+
 	exportDatabase(roomid: string): void {
 		if (!(roomid in this.databases) || roomid.startsWith(Tools.battleRoomPrefix) || roomid.startsWith(Tools.groupchatPrefix)) return;
+
 		const contents = JSON.stringify(this.databases[roomid]);
+		if (roomid in this.lastExportedDatabaseContents && contents === this.lastExportedDatabaseContents[roomid]) return;
+
+		this.lastExportedDatabaseContents[roomid] = contents;
 		Tools.safeWriteFileSync(path.join(this.databasesDir, roomid + '.json'), contents);
 	}
 
@@ -130,6 +137,20 @@ export class Storage {
 		}
 
 		const globalDatabase = this.getGlobalDatabase();
+
+		// convert old offline messages
+		if (globalDatabase.offlineMessages) {
+			for (const user in globalDatabase.offlineMessages) {
+				// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+				if (!globalDatabase.offlineMessages[user].messages) {
+					globalDatabase.offlineMessages[user] = {
+						// @ts-expect-error
+						messages: globalDatabase.offlineMessages[user],
+					};
+				}
+			}
+		}
+
 		if (globalDatabase.lastSeen) {
 			const now = Date.now();
 			for (const i in globalDatabase.lastSeen) {
@@ -196,9 +217,15 @@ export class Storage {
 			}
 		}
 
+		database.lastCycleData = {
+			scriptedGameStats: database.scriptedGameStats,
+			userHostedGameStats: database.userHostedGameStats,
+		};
+
 		if (database.scriptedGameCounts) database.scriptedGameCounts = {};
 		if (database.userHostedGameCounts) database.userHostedGameCounts = {};
-		if (database.userHostedGameStats) database.previousUserHostedGameStats = database.userHostedGameStats;
+		if (database.scriptedGameStats) database.scriptedGameStats = [];
+		if (database.userHostedGameStats) database.userHostedGameStats = {};
 
 		this.updateLeaderboardCaches(roomid, database);
 		this.exportDatabase(roomid);
@@ -212,7 +239,7 @@ export class Storage {
 			annual: 0,
 			annualSources: {},
 			current: 0,
-			name,
+			name: Tools.toAlphaNumeric(name),
 			sources: {},
 		};
 	}
@@ -223,7 +250,6 @@ export class Storage {
 		if (id in database.gameTrainerCards) return;
 
 		database.gameTrainerCards[id] = {
-			avatar: '',
 			pokemon: [],
 		};
 	}
@@ -235,7 +261,6 @@ export class Storage {
 
 		database.gameHostBoxes[id] = {
 			pokemon: [],
-			shinyPokemon: [],
 		};
 	}
 
@@ -249,12 +274,22 @@ export class Storage {
 		};
 	}
 
+	createOfflineMessagesEntry(name: string): void {
+		const globalDatabase = this.getGlobalDatabase();
+		const id = Tools.toId(name);
+		if (!globalDatabase.offlineMessages) globalDatabase.offlineMessages = {};
+		if (id in globalDatabase.offlineMessages) return;
+
+		globalDatabase.offlineMessages[id] = {
+			messages: [],
+		};
+	}
+
 	addPoints(room: Room, leaderboardType: LeaderboardType, name: string, amount: number, source: string): void {
 		if (!amount) return;
 
-		name = Tools.toAlphaNumeric(name);
 		const id = Tools.toId(name);
-		if (!id) return;
+		if (!id || !Tools.isUsernameLength(id)) return;
 		source = Tools.toId(source);
 		if (!source) return;
 
@@ -271,7 +306,7 @@ export class Storage {
 		if (!(id in leaderboard.entries)) {
 			this.createLeaderboardEntry(leaderboard, name, id);
 		} else {
-			leaderboard.entries[id].name = name;
+			leaderboard.entries[id].name = Tools.toAlphaNumeric(name);
 		}
 
 		leaderboard.entries[id].current = Math.max(0, leaderboard.entries[id].current + amount);
@@ -494,12 +529,23 @@ export class Storage {
 			}
 		}
 
+		if (database.gameHostBoxes && sourceId in database.gameHostBoxes) {
+			database.gameHostBoxes[destinationId] = database.gameHostBoxes[sourceId];
+			delete database.gameHostBoxes[sourceId];
+		}
+
+		if (database.gameScriptedBoxes && sourceId in database.gameScriptedBoxes) {
+			database.gameScriptedBoxes[destinationId] = database.gameScriptedBoxes[sourceId];
+			delete database.gameScriptedBoxes[sourceId];
+		}
+
+		if (database.gameTrainerCards && sourceId in database.gameTrainerCards) {
+			database.gameTrainerCards[destinationId] = database.gameTrainerCards[sourceId];
+			delete database.gameTrainerCards[sourceId];
+		}
+
 		if (updatedLeaderboard) this.updateLeaderboardCaches(roomid, database);
 		return true;
-	}
-
-	getMaxOfflineMessageLength(sender: User): number {
-		return Tools.maxMessageLength - (baseOfflineMessageLength + sender.name.length);
 	}
 
 	storeOfflineMessage(sender: string, recipientId: string, message: string): boolean {
@@ -508,61 +554,37 @@ export class Storage {
 		if (recipientId in database.offlineMessages) {
 			const senderId = Tools.toId(sender);
 			let queuedMessages = 0;
-			for (const offlineMessage of database.offlineMessages[recipientId]) {
+			for (const offlineMessage of database.offlineMessages[recipientId].messages) {
 				if (!offlineMessage.readTime && Tools.toId(offlineMessage.sender) === senderId) queuedMessages++;
 			}
 			if (queuedMessages > MAX_QUEUED_OFFLINE_MESSAGES) return false;
 		} else {
-			database.offlineMessages[recipientId] = [];
+			database.offlineMessages[recipientId] = {
+				messages: [],
+			};
 		}
 
-		database.offlineMessages[recipientId].push({
+		database.offlineMessages[recipientId].messages.push({
 			message,
-			sender,
+			sender: Tools.toAlphaNumeric(sender),
 			readTime: 0,
 			sentTime: Date.now(),
 		});
 		return true;
 	}
 
-	retrieveOfflineMessages(user: User, retrieveRead?: boolean): boolean {
+	retrieveOfflineMessages(user: User): void {
 		const database = this.getGlobalDatabase();
-		if (!database.offlineMessages || !(user.id in database.offlineMessages)) return false;
-		const now = Date.now();
-		const expiredTime = now - OFFLINE_MESSAGE_EXPIRATION;
-		const filteredMessages: IOfflineMessage[] = [];
-		let hasExpiredMessages = false;
-		for (const message of database.offlineMessages[user.id]) {
-			if (message.readTime) {
-				if (message.readTime <= expiredTime) {
-					message.expired = true;
-					if (!hasExpiredMessages) hasExpiredMessages = true;
-				}
-				if (!retrieveRead) continue;
-			}
-			const date = new Date(message.sentTime);
-			let dateString = date.toUTCString();
-			dateString = dateString.substr(dateString.indexOf(',') + 1);
-			dateString = dateString.substr(0, dateString.indexOf(':') - 3);
-			let timeString = date.toTimeString();
-			timeString = timeString.substr(0, timeString.indexOf('('));
-			const formattedMessage = "[" + dateString.trim() + ", " + timeString.trim() + "] " + "**" + message.sender + "** said: " +
-				message.message;
-			if (Client.checkFilters(formattedMessage)) {
-				filteredMessages.push(message);
-			} else {
-				user.say(formattedMessage);
-				message.readTime = now;
+		if (!database.offlineMessages || !(user.id in database.offlineMessages)) return;
+		let hasNewMail = false;
+		for (const message of database.offlineMessages[user.id].messages) {
+			if (!message.readTime && !Client.checkFilters(message.message)) {
+				hasNewMail = true;
+				break;
 			}
 		}
 
-		for (const filteredMessage of filteredMessages) {
-			database.offlineMessages[user.id].splice(database.offlineMessages[user.id].indexOf(filteredMessage), 1);
-		}
-
-		if (hasExpiredMessages) database.offlineMessages[user.id] = database.offlineMessages[user.id].filter(x => !x.expired);
-
-		return true;
+		if (hasNewMail) CommandParser.parse(user, user, Config.commandCharacter + "checkmail", Date.now());
 	}
 
 	clearOfflineMessages(user: User): boolean {

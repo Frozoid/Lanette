@@ -181,7 +181,6 @@ class MismagiusFoulPlay extends ScriptedGame {
 			const player = this.players[i];
 			let text = player.name + ": ";
 			const chosenPokemon = this.chosenPokemon.get(player)!;
-			// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
 			const hasParam = data[category!][param].includes(chosenPokemon);
 			const isCriminal = this.criminals.includes(player);
 			if ((hasParam && !isCriminal) || (!hasParam && isCriminal)) {
@@ -254,7 +253,6 @@ class MismagiusFoulPlay extends ScriptedGame {
 
 const commands: GameCommandDefinitions<MismagiusFoulPlay> = {
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			const player = this.players[user.id];
 			if (this.chosenPokemon.has(player)) {
@@ -287,7 +285,6 @@ const commands: GameCommandDefinitions<MismagiusFoulPlay> = {
 		pmOnly: true,
 	},
 	suspect: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			const player = this.players[user.id];
 			if (this.roundGuesses.has(player)) {
@@ -364,21 +361,23 @@ const commands: GameCommandDefinitions<MismagiusFoulPlay> = {
 	},
 };
 
-commands.summary = Tools.deepClone(Games.sharedCommands.summary);
+commands.summary = Tools.deepClone(Games.getSharedCommands().summary);
 commands.summary.aliases = ['role'];
 
 export const game: IGameFile<MismagiusFoulPlay> = {
 	aliases: ['mismagius', 'mfp'],
-	category: 'strategy',
+	category: 'puzzle',
 	class: MismagiusFoulPlay,
 	commandDescriptions: [Config.commandCharacter + "select [Pokemon]", Config.commandCharacter + "suspect [player], [Pokemon]"],
 	commands,
 	description: "<a href='https://docs.google.com/document/d/1Zx72KwQjQyKE4yWsM83yimglxa5qOnM-YTudCJ89fKM/edit'>Guide</a> | Detectives " +
 		"try to help Mismagius identify the criminals in this murder mystery team game (one guess per round)! Parameters will be given " +
 		"as hints but they will be opposite for criminals.",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Mismagius' Foul Play",
 	mascot: "Mismagius",
-	noOneVsOne: true,
 	nonTrivialLoadData: true,
 	scriptedOnly: true,
 };

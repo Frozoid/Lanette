@@ -3,6 +3,7 @@ import type { ScriptedGame } from "./room-game-scripted";
 import type { UserHostedGame } from "./room-game-user-hosted";
 import type { Tournament } from "./room-tournament";
 import type { GroupName, IChatLogEntry, IOutgoingMessage, IRoomInfoResponse, MessageListener } from "./types/client";
+import type { IFormat } from "./types/pokemon-showdown";
 import type { IRepeatedMessage, IRoomMessageOptions, RoomType } from "./types/rooms";
 import type { IUserHostedTournament } from "./types/tournaments";
 import type { User } from "./users";
@@ -160,39 +161,37 @@ export class Room {
 			}
 		}
 
-		const type = options && options.type ? options.type : 'chat';
-		const outgoingMessage: IOutgoingMessage = {message: this.sendId + "|" + message, type};
-		if (!(options && options.dontMeasure)) {
+		const outgoingMessage: IOutgoingMessage = Object.assign(options || {}, {
+			roomid: this.id,
+			message: this.sendId + "|" + message,
+			type: options && options.type ? options.type : 'chat',
+		});
+
+		if (!options || !options.dontMeasure) {
 			outgoingMessage.measure = true;
-			if (options && options.html) {
-				outgoingMessage.html = options.html;
-				if (options.uhtmlName) outgoingMessage.uhtmlName = options.uhtmlName;
-			} else if (type === 'leaveroom') {
-				outgoingMessage.roomid = this.id;
-			} else {
-				outgoingMessage.text = message;
-			}
+
+			if (!outgoingMessage.html) outgoingMessage.text = message;
 		}
 
 		Client.send(outgoingMessage);
 	}
 
-	sayCommand(command: string, dontCheckFilter?: boolean): void {
-		this.say(command, {dontCheckFilter, dontPrepare: true, dontMeasure: true, type: 'command'});
+	sayCode(code: string): void {
+		this.say("!code " + code, {dontCheckFilter: true, dontPrepare: true, type: 'code', html: Client.getCodeListenerHtml(code)});
 	}
 
 	sayHtml(html: string): void {
-		this.say("/addhtmlbox " + html, {html: Client.getListenerHtml(html), dontCheckFilter: true, dontPrepare: true, type: 'html'});
+		this.say("/addhtmlbox " + html, {html: Client.getListenerHtml(html), dontCheckFilter: true, dontPrepare: true, type: 'chat-html'});
 	}
 
 	sayUhtml(uhtmlName: string, html: string): void {
 		this.say("/adduhtml " + uhtmlName + ", " + html,
-			{uhtmlName, html: Client.getListenerUhtml(html), dontCheckFilter: true, dontPrepare: true, type: 'uhtml'});
+			{uhtmlName, html: Client.getListenerUhtml(html), dontCheckFilter: true, dontPrepare: true, type: 'chat-uhtml'});
 	}
 
 	sayUhtmlChange(uhtmlName: string, html: string): void {
 		this.say("/changeuhtml " + uhtmlName + ", " + html,
-			{uhtmlName, html: Client.getListenerUhtml(html), dontCheckFilter: true, dontPrepare: true, type: 'uhtml'});
+			{uhtmlName, html: Client.getListenerUhtml(html), dontCheckFilter: true, dontPrepare: true, type: 'chat-uhtml'});
 	}
 
 	sayAuthUhtml(uhtmlName: string, html: string): void {
@@ -206,40 +205,66 @@ export class Room {
 	}
 
 	sayModUhtml(uhtmlName: string, html: string, rank: GroupName): void {
-		this.say("/addrankuhtml " + Client.groupSymbols[rank] + ", " + uhtmlName + ", " + html,
+		this.say("/addrankuhtml " + Client.getGroupSymbols()[rank] + ", " + uhtmlName + ", " + html,
 			{dontCheckFilter: true, dontPrepare: true, dontMeasure: true, type: 'command'});
 	}
 
 	sayModUhtmlChange(uhtmlName: string, html: string, rank: GroupName): void {
-		this.say("/changerankuhtml " + Client.groupSymbols[rank] + ", " + uhtmlName + ", " + html,
+		this.say("/changerankuhtml " + Client.getGroupSymbols()[rank] + ", " + uhtmlName + ", " + html,
 			{dontCheckFilter: true, dontPrepare: true, dontMeasure: true, type: 'command'});
 	}
 
 	pmHtml(user: User | Player, html: string): void {
 		if (!Users.get(user.name)) return;
 
-		this.say("/pminfobox " + user.id + "," + html, {html, dontCheckFilter: true, dontPrepare: true, type: 'pmhtml', user: user.id});
+		this.say("/pminfobox " + user.id + "," + html, {html: Client.getListenerHtml(html, true), dontCheckFilter: true, dontPrepare: true,
+			type: 'pm-html', user: user.id});
 	}
 
 	pmUhtml(user: User | Player, uhtmlName: string, html: string): void {
 		if (!Users.get(user.name)) return;
 
 		this.say("/pmuhtml " + user.id + "," + uhtmlName + "," + html,
-			{uhtmlName, html, dontCheckFilter: true, dontPrepare: true, type: 'pmuhtml', user: user.id});
+			{uhtmlName, html, dontCheckFilter: true, dontPrepare: true, type: 'pm-uhtml', user: user.id});
 	}
 
 	pmUhtmlChange(user: User | Player, uhtmlName: string, html: string): void {
 		if (!Users.get(user.name)) return;
 
 		this.say("/pmuhtmlchange " + user.id + "," + uhtmlName + "," + html,
-			{uhtmlName, html, dontCheckFilter: true, dontPrepare: true, type: 'pmuhtml', user: user.id});
+			{uhtmlName, html, dontCheckFilter: true, dontPrepare: true, type: 'pm-uhtml', user: user.id});
+	}
+
+	announce(text: string): void {
+		this.say("/announce " + text, {type: 'announce', announcement: text});
+	}
+
+	warn(user: User, reason: string): void {
+		this.say("/warn " + user.name + ", " + reason, {type: 'warn', warnReason: reason});
+	}
+
+	modnote(text: string): void {
+		this.say("/modnote " + text, {type: 'modnote', modnote: text});
+	}
+
+	notifyRank(rank: GroupName | 'all', title: string, message: string, highlightPhrase?: string): void {
+		const symbol = rank === 'all' ? rank : Client.getGroupSymbols()[rank];
+		this.say("/notifyrank " + symbol + "," + title + "," + message + (highlightPhrase ? ","  + highlightPhrase : ""),
+			{dontCheckFilter: true, dontPrepare: true, type: 'notifyrank', notifyId: this.id + "-rank-" + rank,
+			notifyTitle: title, notifyMessage: message});
+	}
+
+	notifyOffRank(rank: GroupName | 'all'): void {
+		const symbol = rank === 'all' ? rank : Client.getGroupSymbols()[rank];
+		this.say("/notifyoffrank " + symbol,
+			{dontCheckFilter: true, dontPrepare: true, type: 'notifyoffrank', notifyId: this.id + "-rank-" + rank});
 	}
 
 	sendHtmlPage(user: User | Player, pageId: string, html: string): void {
 		if (!Users.get(user.name)) return;
 
 		this.say("/sendhtmlpage " + user.id + "," + pageId + "," + html,
-			{dontCheckFilter: true, dontPrepare: true, dontMeasure: true, type: 'command'});
+			{dontCheckFilter: true, dontPrepare: true, type: 'htmlpage', user: user.id, pageId: Users.self.id + "-" + pageId});
 	}
 
 	closeHtmlPage(user: User | Player, pageId: string): void {
@@ -250,11 +275,74 @@ export class Room {
 		if (!Users.get(user.name)) return;
 
 		this.say("/highlighthtmlpage " + user.id + "," + pageId + "," + notificationTitle + (highlightPhrase ? "," + highlightPhrase : ""),
-			{dontCheckFilter: true, dontPrepare: true, dontMeasure: true, type: 'command'});
+			{dontCheckFilter: true, dontPrepare: true, type: 'highlight-htmlpage', user: user.id, pageId: Users.self.id + "-" + pageId});
+	}
+
+	setModchat(level: string): void {
+		this.say("/modchat " + level, {dontCheckFilter: true, dontPrepare: true, type: 'modchat', modchatLevel: level});
+	}
+
+	roomVoice(name: string): void {
+		this.say("/roomvoice " + name, {dontCheckFilter: true, dontPrepare: true, type: 'room-voice', user: Tools.toId(name)});
+	}
+
+	roomDeAuth(name: string): void {
+		this.say("/roomdeauth " + name, {dontCheckFilter: true, dontPrepare: true, type: 'room-deauth', user: Tools.toId(name)});
+	}
+
+	createTournament(format: IFormat, cap?: number, tournamentName?: string): void {
+		if (!cap) cap = 0;
+
+		this.say("/tour new " + format.id + ", elimination," + cap + (tournamentName ? ",1," + tournamentName : ""),
+			{dontCheckFilter: true, dontPrepare: true, type: 'tournament-create'});
+	}
+
+	startTournament(): void {
+		this.say("/tour start", {dontCheckFilter: true, dontPrepare: true, type: 'tournament-start'});
+	}
+
+	nameTournament(name: string): void {
+		this.say("/tour name " + name, {dontCheckFilter: true, dontPrepare: true, type: 'tournament-name'});
+	}
+
+	setTournamentCap(playerCap: number): void {
+		this.say("/tour cap " + playerCap, {dontCheckFilter: true, dontPrepare: true, type: 'tournament-cap'});
+	}
+
+	autoStartTournament(): void {
+		this.say("/tour autostart on", {dontCheckFilter: true, dontPrepare: true, type: 'tournament-autostart'});
+	}
+
+	setTournamentAutoDq(minutes: number): void {
+		this.say("/tour autodq " + minutes, {dontCheckFilter: true, dontPrepare: true, type: 'tournament-autodq'});
+	}
+
+	forcePublicTournament(): void {
+		this.say("/tour forcepublic on", {dontCheckFilter: true, dontPrepare: true, type: 'tournament-forcepulic'});
+	}
+
+	disallowTournamentScouting(): void {
+		this.say("/tour scouting disallow", {dontCheckFilter: true, dontPrepare: true, type: 'tournament-scouting'});
+	}
+
+	disallowTournamentModjoin(): void {
+		this.say("/tour modjoin disallow", {dontCheckFilter: true, dontPrepare: true, type: 'tournament-modjoin'});
+	}
+
+	setTournamentRules(rules: string): void {
+		this.say("/tour rules " + rules, {dontCheckFilter: true, dontPrepare: true, type: 'tournament-rules'});
+	}
+
+	startHangman(answer: string, hint: string): void {
+		this.say("/hangman create " + answer + ", " + hint, {dontCheckFilter: true, dontPrepare: true, type: 'hangman-start'});
+	}
+
+	endHangman(): void {
+		this.say("/hangman end", {dontCheckFilter: true, dontPrepare: true, type: 'hangman-end'});
 	}
 
 	leave(): void {
-		this.say("/leave", {dontCheckFilter: true, dontPrepare: true, type: 'leaveroom'});
+		this.say("/leave", {dontCheckFilter: true, dontPrepare: true, type: 'leave-room'});
 	}
 
 	on(message: string, listener: MessageListener): void {

@@ -130,8 +130,8 @@ class DelcattysHideAndSeek extends ScriptedGame {
 			this.canCharm = true;
 			this.timeout = setTimeout(() => {
 				this.canCharm = false;
-				this.say("**" + this.charmer.name + "** did not choose a Pokemon to charm!");
-				this.eliminatePlayer(this.charmer, "You did not choose a Pokemon to charm!");
+				this.say("**" + this.charmer.name + "** did not choose a Pokemon to charm and has been eliminated from the game!");
+				this.eliminatePlayer(this.charmer);
 				this.timeout = setTimeout(() => this.nextRound(), 5 * 1000);
 			}, 60 * 1000);
 		});
@@ -154,7 +154,6 @@ class DelcattysHideAndSeek extends ScriptedGame {
 
 const commands: GameCommandDefinitions<DelcattysHideAndSeek> = {
 	charm: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.players[user.id] !== this.charmer || !this.canCharm) return false;
 			const player = this.players[user.id];
@@ -184,14 +183,14 @@ const commands: GameCommandDefinitions<DelcattysHideAndSeek> = {
 				if (this.players[i].eliminated) continue;
 				const otherPlayer = this.players[i];
 				if (this.pokemonChoices.get(otherPlayer) === pokemon.name) {
-					this.eliminatePlayer(otherPlayer, "Your Pokemon was charmed!");
+					this.eliminatePlayer(otherPlayer);
 					eliminatedPlayers.push(otherPlayer.name);
 				}
 			}
 			if (!eliminatedPlayers.length) {
-				this.say("**" + this.charmer.name + "** charmed **" + pokemon.name + "**! Unfortunately, they did not eliminate " +
-					"anyone...");
-				this.eliminatePlayer(this.charmer, "No one chose the Pokemon you charmed!");
+				this.say("**" + this.charmer.name + "** charmed **" + pokemon.name + "** but no one chose that Pokemon! " +
+					this.charmer.name + " has been eliminated from the game!");
+				this.eliminatePlayer(this.charmer);
 			} else {
 				this.say("**" + this.charmer.name + "** charmed **" + pokemon.name + "** and eliminated " +
 					Tools.joinList(eliminatedPlayers) + " from the game!");
@@ -203,7 +202,6 @@ const commands: GameCommandDefinitions<DelcattysHideAndSeek> = {
 		chatOnly: true,
 	},
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canSelect) return false;
 			const player = this.players[user.id];
@@ -245,7 +243,6 @@ const commands: GameCommandDefinitions<DelcattysHideAndSeek> = {
 
 const tests: GameFileTests<DelcattysHideAndSeek> = {
 	'should have parameters for all possible numbers of remaining players': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			// potentially +/- 1 Pokemon each round
 			const maxPlayers = game.maxPlayers + 1;
@@ -263,7 +260,6 @@ const tests: GameFileTests<DelcattysHideAndSeek> = {
 		},
 	},
 	'should eliminate players who are charmed': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 2);
 			game.minPlayers = 2;
@@ -282,7 +278,6 @@ const tests: GameFileTests<DelcattysHideAndSeek> = {
 		},
 	},
 	'should eliminate the charmer if they fail to charm any players': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 2);
 			game.minPlayers = 2;
@@ -300,14 +295,16 @@ const tests: GameFileTests<DelcattysHideAndSeek> = {
 
 export const game: IGameFile<DelcattysHideAndSeek> = {
 	aliases: ['delcattys', 'dhs'],
-	category: 'strategy',
+	category: 'luck',
 	class: DelcattysHideAndSeek,
 	commandDescriptions: [Config.commandCharacter + "select [Pokemon]", Config.commandCharacter + "charm [Pokemon]"],
 	commands,
 	description: "Each round, the host will give a param that determines Pokemon players can hide behind (by PMing the host). One " +
 		"player will be chosen to seek one Pokemon. If anyone hid behind it, they are eliminated. If not, the seeker is eliminated.",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Delcatty's Hide and Seek",
-	noOneVsOne: true,
 	mascot: "Delcatty",
 	nonTrivialLoadData: true,
 	tests,

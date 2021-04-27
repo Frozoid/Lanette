@@ -141,7 +141,7 @@ class SpindasExcludedPokemon extends ScriptedGame {
 			if (this.addPlayerInactiveRound(this.currentPlayer)) {
 				this.say(this.currentPlayer.name + " did not exclude a Pokemon or guess the parameter and has been eliminated from " +
 					"the game!");
-				this.eliminatePlayer(this.currentPlayer, "You did not exclude a Pokemon or guess the parameter!");
+				this.eliminatePlayer(this.currentPlayer);
 			} else {
 				this.say(this.currentPlayer.name + " did not exclude a Pokemon or guess the parameter and can no longer guess " +
 					"this round.");
@@ -198,7 +198,7 @@ class SpindasExcludedPokemon extends ScriptedGame {
 			const player = this.players[id];
 			const points = this.points.get(player);
 			if (points === this.format.options.points) {
-				this.winners.set(player, 1);
+				this.winners.set(player, points);
 				this.addBits(player, 500);
 			} else if (points) {
 				this.addBits(player, 100 * points);
@@ -211,10 +211,8 @@ class SpindasExcludedPokemon extends ScriptedGame {
 
 const commands: GameCommandDefinitions<SpindasExcludedPokemon> = {
 	exclude: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.parameter || this.players[user.id] !== this.currentPlayer) return false;
-			const player = this.players[user.id];
 			const pokemon = Dex.getPokemon(target);
 			if (!pokemon) {
 				this.say(CommandParser.getErrorText(['invalidPokemon', target]));
@@ -234,8 +232,7 @@ const commands: GameCommandDefinitions<SpindasExcludedPokemon> = {
 			if (!data.pokemon[pokemon.name][this.category].includes(this.parameter)) {
 				this.say(pokemon.name + " is **not** excluded!");
 			} else {
-				this.say(pokemon.name + " **is** excluded! " + player.name + " can no longer guess this round.");
-				player.frozen = true;
+				this.say(pokemon.name + " **is** excluded!");
 			}
 
 			this.currentPlayer = null;
@@ -244,7 +241,6 @@ const commands: GameCommandDefinitions<SpindasExcludedPokemon> = {
 		},
 	},
 	guess: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.parameter || this.players[user.id] !== this.currentPlayer) return false;
 			const player = this.players[user.id];

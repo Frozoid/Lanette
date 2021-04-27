@@ -4,16 +4,24 @@ import type { Room } from "./rooms";
 import type { GameDifficulty, IUserHostedFile, IUserHostedFormat } from "./types/games";
 import type { User } from "./users";
 
+const FIRST_ACTIVITY_WARNING = 5 * 60 * 1000;
+const SECOND_ACTIVITY_WARNING = 30 * 1000;
+const MIN_HOST_EXTENSION_MINUTES = 1;
+const MAX_HOST_EXTENSION_MINUTES = 2;
 const FORCE_END_CREATE_TIMER = 60 * 1000;
 const HOST_TIME_LIMIT = 25 * 60 * 1000;
 
 export class UserHostedGame extends Game {
 	endTime: number = 0;
+	extended: boolean = false;
 	gameTimer: NodeJS.Timer | null = null;
+	gameTimerEndTime: number = 0;
 	hostId: string = '';
 	hostName: string = '';
 	hostTimeout: NodeJS.Timer | null = null;
+	isUserHosted: boolean = true;
 	mascots: string[] = [];
+	noControlPanel: boolean = false;
 	notifyRankSignups: boolean = true;
 	readonly points = new Map<Player, number>();
 	savedWinners: Player[] = [];
@@ -30,6 +38,88 @@ export class UserHostedGame extends Game {
 
 	room!: Room;
 
+	reset(): void {
+		if (this.timeout) {
+			clearTimeout(this.timeout);
+			this.timeout = null;
+		}
+
+		if (this.gameTimer) {
+			clearTimeout(this.gameTimer);
+			this.gameTimer = null;
+		}
+
+		if (this.hostTimeout) {
+			clearTimeout(this.hostTimeout);
+			this.hostTimeout = null;
+		}
+
+		if (this.startTimer) {
+			clearTimeout(this.startTimer);
+			this.startTimer = null;
+		}
+
+		if (this.signupsHtmlTimeout) {
+			clearTimeout(this.signupsHtmlTimeout);
+			this.signupsHtmlTimeout = null;
+		}
+
+		this.clearHangman();
+		this.clearSignupsNotification();
+
+		this.endTime = 0;
+		this.mascots = [];
+		this.points.clear();
+		this.savedWinners = [];
+		this.scoreCap = 0;
+		this.shinyMascot = false;
+		this.storedMessages = null;
+		this.subHostId = null;
+		this.subHostName = null;
+		this.twist = null;
+
+		this.started = false;
+		this.startTime = 0;
+		this.minPlayers = 4;
+		this.players = {};
+		this.playerCount = 0;
+		this.teams = null;
+	}
+
+	restart(format: IUserHostedFormat): void {
+		this.reset();
+
+		this.onInitialize(format);
+		this.id = format.id;
+		this.description = format.description;
+
+		this.setHost(this.hostName);
+		this.signups();
+	}
+
+	extend(target: string, user: User): string | undefined {
+		if (this.extended) return "The game cannot be extended more than once.";
+
+		const now = Date.now();
+		if (this.endTime - now > FIRST_ACTIVITY_WARNING) {
+			return "You cannot extend the game if there are more than " + (FIRST_ACTIVITY_WARNING / 60 / 1000) + " minutes remaining.";
+		}
+
+		const minutes = parseFloat(target);
+		if (isNaN(minutes) || minutes < MIN_HOST_EXTENSION_MINUTES || minutes > MAX_HOST_EXTENSION_MINUTES) {
+			return "You must specify an extension time between " + MIN_HOST_EXTENSION_MINUTES + " and " +
+				MAX_HOST_EXTENSION_MINUTES + " minutes.";
+		}
+
+		this.endTime += minutes * 60 * 1000;
+		this.extended = true;
+		this.setSecondActivityTimer();
+
+		const extension = minutes + " minute" + (minutes === 1 ? "" : "s");
+		this.say((this.subHostName || this.hostName) + " your game has been extended by " + extension + ".");
+		if (!this.subHostName) this.room.modnote(user.name + " extended " + this.hostName + "'s game by " + extension + ".");
+	}
+
 	// Display
 	getMascotAndNameHtml(additionalText?: string): string {
 		const icons: string[] = [];
@@ -41,7 +131,7 @@ export class UserHostedGame extends Game {
 	}
 
 	// Host
-	setHost(host: User | string): void {
+	setHost(host: User | string, noControlPanel?: boolean): void {
 		if (typeof host === 'string') {
 			this.hostId = Tools.toId(host);
 			this.hostName = host;
@@ -54,8 +144,8 @@ export class UserHostedGame extends Game {
 		const database = Storage.getDatabase(this.room);
 		if (database.gameHostBoxes && this.hostId in database.gameHostBoxes && Config.showGameHostBoxes &&
 			Config.showGameHostBoxes.includes(this.room.id)) {
-			for (const species of database.gameHostBoxes[this.hostId].pokemon) {
-				const pokemon = Dex.getPokemon(species);
+			for (const choice of database.gameHostBoxes[this.hostId].pokemon) {
+				const pokemon = Dex.getPokemon(choice.pokemon);
 				if (pokemon) {
 					this.mascots.push(pokemon.name);
 				}
@@ -80,11 +170,50 @@ export class UserHostedGame extends Game {
 		} else {
 			this.name = this.hostName + "'s " + this.format.name;
 		}
+
+		if (noControlPanel) {
+			this.noControlPanel = true;
+		} else {
+			this.sendControlPanelButton();
+		}
 	}
 
 	setSubHost(user: User): void {
 		this.subHostId = user.id;
 		this.subHostName = user.name;
+
+		this.sendControlPanelButton();
+	}
+
+	sendControlPanelButton(): void {
+		if (this.noControlPanel) return;
+
+		const user = Users.get(this.subHostName || this.hostName);
+		if (user) {
+			this.room.pmHtml(user, "To assist with your game, try using the <b>Host Control Panel</b>! It allows you to manage " +
+				"attributes of your game, display trainers & Pokemon, and generate hints.<br /><br />" +
+				Client.getPmSelfButton(Config.commandCharacter + "gamehostcontrolpanel " + this.room.title, "Open panel"));
+		}
+	}
+
+	autoRefreshControlPanel(): void {
+		if (this.noControlPanel) return;
+
+		const user = Users.get(this.subHostName || this.hostName);
+		if (user) {
+			CommandParser.parse(user, user, Config.commandCharacter + "gamehostcontrolpanel " + this.room.title + ", autorefresh",
+				Date.now());
+		}
+	}
+
+	closeControlPanel(): void {
+		if (this.noControlPanel) return;
+
+		const user = Users.get(this.subHostName || this.hostName);
+		if (user) {
+			CommandParser.parse(user, user, Config.commandCharacter + "gamehostcontrolpanel " + this.room.title + ", close",
+				Date.now());
+		}
 	}
 
 	isHost(user: User): boolean {
@@ -104,7 +233,10 @@ export class UserHostedGame extends Game {
 	// Players
 	addPlayer(user: User): Player | undefined {
 		if (this.format.options.freejoin) {
-			user.say("This game does not require you to join.");
+			if (!this.joinNotices.has(user.id)) {
+				user.say("This game does not require you to join.");
+				this.joinNotices.add(user.id);
+			}
 			return;
 		}
 
@@ -113,13 +245,16 @@ export class UserHostedGame extends Game {
 		const player = this.createPlayer(user);
 		if (!player) return;
 
-		player.say("Thanks for joining " + this.name + " " + this.activityType + "!");
+		if (!this.joinNotices.has(user.id)) {
+			player.say("Thanks for joining " + this.name + " " + this.activityType + "!");
+			this.joinNotices.add(user.id);
+		}
 
 		if (!this.signupsHtmlTimeout) {
 			this.signupsHtmlTimeout = setTimeout(() => {
-				this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+				this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsPlayersHtml());
 				this.signupsHtmlTimeout = null;
-			}, Client.getSendThrottle() * 2);
+			}, this.getSignupsUpdateDelay());
 		}
 
 		if (this.playerCap && this.playerCount >= this.playerCap) this.start();
@@ -131,8 +266,10 @@ export class UserHostedGame extends Game {
 		const player = this.destroyPlayer(user);
 		if (!player) return;
 
-		if (!silent) {
-			player.say("You have left " + this.name + " " + this.activityType + ".");
+		const id = typeof user === 'string' ? Tools.toId(user) : user.id;
+		if (!silent && !this.leaveNotices.has(id)) {
+			player.say("You have left " + this.name + " " + this.activityType + ". You will not receive any further signups messages.");
+			this.leaveNotices.add(id);
 		}
 
 		if (this.format.options.freejoin) return;
@@ -140,9 +277,9 @@ export class UserHostedGame extends Game {
 		if (!this.started) {
 			if (!this.signupsHtmlTimeout) {
 				this.signupsHtmlTimeout = setTimeout(() => {
-					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsPlayersHtml());
 					this.signupsHtmlTimeout = null;
-				}, Client.getSendThrottle() * 2);
+				}, this.getSignupsUpdateDelay());
 			}
 		}
 	}
@@ -194,7 +331,7 @@ export class UserHostedGame extends Game {
 	}
 
 	getHighlightPhrase(): string {
-		return Games.userHostedGameHighlight + " " + this.id;
+		return Games.getUserHostedGameHighlight() + " " + this.id;
 	}
 
 	getSignupsHtml(): string {
@@ -204,35 +341,25 @@ export class UserHostedGame extends Game {
 	signups(): void {
 		this.signupsTime = Date.now();
 		this.signupsStarted = true;
-		this.sayHtml(this.getSignupsHtml());
-		if (!this.format.options.freejoin) this.sayUhtml(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
 
-		let joinLeaveHtml = "<center>";
-		if (this.format.options.freejoin) {
-			joinLeaveHtml += "<b>This game is free-join!</b>";
-		} else {
-			joinLeaveHtml += Client.getPmSelfButton(Config.commandCharacter + "joingame " + this.room.id, "Join game");
-			joinLeaveHtml += " | ";
-			joinLeaveHtml += Client.getPmSelfButton(Config.commandCharacter + "leavegame " + this.room.id, "Leave game");
+		const database = Storage.getDatabase(this.room);
+		if (database.gameHostBoxes && this.hostId in database.gameHostBoxes) {
+			const box = database.gameHostBoxes[this.hostId];
+			this.customBackgroundColor = box.signupsBackground || box.background;
+			this.customButtonColor = box.signupsButtons || box.buttons;
 		}
-		joinLeaveHtml += "</center>";
-		this.sayUhtml(this.joinLeaveButtonUhtmlName, joinLeaveHtml);
 
-		this.sayCommand("/notifyrank all, " + this.room.title + " user-hosted game," + this.name + "," + this.hostId + " " +
-			this.getHighlightPhrase(), true);
-		const firstWarning = 5 * 60 * 1000;
-		const secondWarning = 30 * 1000;
+		this.sayHtml(this.getSignupsHtml());
+		if (!this.format.options.freejoin) this.sayUhtml(this.signupsUhtmlName, this.getSignupsPlayersHtml());
+		this.sayUhtml(this.joinLeaveButtonUhtmlName, this.getJoinLeaveHtml(this.format.options.freejoin ? true : false));
+
+		this.room.notifyRank("all", this.room.title + " user-hosted game", this.name, this.hostId + " " + this.getHighlightPhrase());
+
 		this.hostTimeout = setTimeout(() => {
-			this.say(this.hostName + " you have " + Tools.toDurationString(firstWarning) + " left! Please start to finish up your game.");
-			this.hostTimeout = setTimeout(() => {
-				this.say(this.hostName + " you have " + Tools.toDurationString(secondWarning) + " left! Please declare the winner(s) " +
-					"with " + Config.commandCharacter + "win.");
-				this.hostTimeout = setTimeout(() => {
-					this.say(this.hostName + " your time is up!");
-					this.end();
-				}, secondWarning);
-			}, firstWarning - secondWarning);
-		}, HOST_TIME_LIMIT - firstWarning);
+			this.say((this.subHostName || this.hostName) + " there are " + Tools.toDurationString(FIRST_ACTIVITY_WARNING) + " remaining " +
+				"in the game!");
+			this.setSecondActivityTimer();
+		}, HOST_TIME_LIMIT - FIRST_ACTIVITY_WARNING);
 
 		if (this.format.options.freejoin) {
 			this.started = true;
@@ -248,11 +375,24 @@ export class UserHostedGame extends Game {
 
 		this.started = true;
 		this.startTime = Date.now();
-		this.sayCommand("/notifyoffrank all");
-		this.sayUhtmlChange(this.joinLeaveButtonUhtmlName, "<div></div>");
+		this.room.notifyOffRank("all");
+		this.sayUhtmlChange(this.joinLeaveButtonUhtmlName, this.getSignupsEndMessage());
 		this.say(this.name + " is starting! **Players (" + this.playerCount + ")**: " + this.getPlayerNames());
 
 		return true;
+	}
+
+	setSecondActivityTimer(): void {
+		if (this.hostTimeout) clearTimeout(this.hostTimeout);
+		this.hostTimeout = setTimeout(() => {
+			this.say((this.subHostName || this.hostName) + " you have " + Tools.toDurationString(SECOND_ACTIVITY_WARNING) + " to " +
+				"declare the winner(s) with ``" + Config.commandCharacter + "win [winner]`` or ``" +
+				Config.commandCharacter + "autowin [places]``!");
+			this.hostTimeout = setTimeout(() => {
+				this.say((this.subHostName || this.hostName) + " your time is up!");
+				this.end();
+			}, SECOND_ACTIVITY_WARNING);
+		}, this.endTime - Date.now() - SECOND_ACTIVITY_WARNING);
 	}
 
 	end(): void {
@@ -260,12 +400,10 @@ export class UserHostedGame extends Game {
 		this.ended = true;
 
 		const now = Date.now();
-		if (!(this.room.id in Games.lastUserHostTimes)) Games.lastUserHostTimes[this.room.id] = {};
-		Games.lastUserHostTimes[this.room.id][this.hostId] = now;
+		Games.setLastUserHostTime(this.room, this.hostId, now);
 
-		if (!(this.room.id in Games.lastUserHostFormatTimes)) Games.lastUserHostFormatTimes[this.room.id] = {};
 		// possibly customized name attribute
-		Games.lastUserHostFormatTimes[this.room.id][Tools.toId(this.format.name)] = now;
+		Games.setLastUserHostFormatTime(this.room, Tools.toId(this.format.name), now);
 
 		const database = Storage.getDatabase(this.room);
 		if (!this.subHostName) {
@@ -275,13 +413,15 @@ export class UserHostedGame extends Game {
 				endTime: now,
 				format: this.format.name,
 				inputTarget: this.format.inputTarget,
-				playerCount: this.playerCount,
+				startingPlayerCount: this.playerCount,
+				endingPlayerCount: this.getRemainingPlayerCount(),
 				startTime: this.signupsTime,
+				winners: Array.from(this.winners.keys()).map(x => x.id),
 			});
 		}
 
-		Games.lastGames[this.room.id] = now;
-		Games.lastUserHostedGames[this.room.id] = now;
+		Games.setLastGame(this.room, now);
+		Games.setLastUserHostedGame(this.room, now);
 		database.lastUserHostedGameTime = now;
 
 		if (!database.lastUserHostedGameFormatTimes) database.lastUserHostedGameFormatTimes = {};
@@ -316,6 +456,11 @@ export class UserHostedGame extends Game {
 				hostBits /= 2;
 			}
 
+			// eslint-disable-next-line @typescript-eslint/no-extra-parens
+			if (Config.afd) hostBits *= (this.random(50) + 1);
+
+			if (Config.onUserHostedGameHost) Config.onUserHostedGameHost(this.room, this.format, hostName);
+
 			Storage.addPoints(this.room, Storage.gameLeaderboard, hostName, hostBits, 'userhosted');
 			const user = Users.get(hostName);
 			if (user) {
@@ -330,10 +475,18 @@ export class UserHostedGame extends Game {
 	}
 
 	forceEnd(user: User, reason?: string): void {
-		delete Games.lastUserHostTimes[this.room.id][this.hostId];
+		Games.removeLastUserHostTime(this.room, this.hostId);
 		this.say(this.name + " " + this.activityType + " was forcibly ended!");
-		this.sayCommand("/modnote " + this.name + " was forcibly ended by " + user.name + (reason ? " (" + reason + ")" : ""));
+		this.room.modnote(this.name + " was forcibly ended by " + user.name + (reason ? " (" + reason + ")" : ""));
 		this.deallocate(true);
+	}
+
+	clearHangman(): void {
+		if (this.room.serverHangman) this.room.endHangman();
+	}
+
+	clearSignupsNotification(): void {
+		if (!this.started || this.format.options.freejoin) this.room.notifyOffRank("all");
 	}
 
 	deallocate(forceEnd: boolean): void {
@@ -347,8 +500,9 @@ export class UserHostedGame extends Game {
 
 		if (this.room.userHostedGame === this) delete this.room.userHostedGame;
 
-		if (this.room.serverHangman) this.sayCommand("/hangman end");
-		if (!this.started || this.format.options.freejoin) this.sayCommand("/notifyoffrank all");
+		this.clearHangman();
+		this.clearSignupsNotification();
+		this.closeControlPanel();
 
 		if (forceEnd && Config.gameAutoCreateTimers && this.room.id in Config.gameAutoCreateTimers) {
 			Games.setAutoCreateTimer(this.room, 'userhosted', FORCE_END_CREATE_TIMER);
@@ -373,7 +527,7 @@ export const game: IUserHostedFile = {
 		{
 			name: "Battle Maison",
 			aliases: ['bm'],
-			description: "A tournament style game where each player is given a Pokemon to battle with in [Gen " + Dex.gen + "] OU. " +
+			description: "A tournament style game where each player is given a Pokemon to battle with in [Gen " + Dex.getGen() + "] OU. " +
 				"Defeating an opponent allows the player to add the opponent's Pokemon to his or her team. This continues until there " +
 				"is only one player left standing!",
 		},

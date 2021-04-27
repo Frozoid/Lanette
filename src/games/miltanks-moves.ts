@@ -17,16 +17,19 @@ class MiltanksMoves extends QuestionAndAnswer {
 	allAnswersAchievement = MiltanksMoves.achievements.mootronome;
 
 	static loadData(): void {
+		const maxMoveAvailability = Games.getMaxMoveAvailability();
 		const bannedMoves: string[] = [];
 		for (const move of Games.getMovesList()) {
 			const availability = Dex.getMoveAvailability(move);
-			if (availability >= Games.maxMoveAvailability) bannedMoves.push(move.id);
+			if (availability >= maxMoveAvailability) bannedMoves.push(move.id);
 		}
 
 		const moveCache: Dict<IMove> = {};
 		const pokedex = Games.getPokemonList(x => x.baseSpecies === x.name);
 		for (const pokemon of pokedex) {
 			const allPossibleMoves = Dex.getAllPossibleMoves(pokemon);
+			if (allPossibleMoves.length === 1) continue;
+
 			for (const possibleMove of allPossibleMoves) {
 				if (bannedMoves.includes(possibleMove)) continue;
 				if (!(possibleMove in moveCache)) {
@@ -64,7 +67,7 @@ class MiltanksMoves extends QuestionAndAnswer {
 
 export const game: IGameFile<MiltanksMoves> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ['miltanks', 'mm'],
-	category: 'knowledge',
+	category: 'knowledge-1',
 	class: MiltanksMoves,
 	defaultOptions: ['points'],
 	description: "Players guess moves of the specified type that the given Pokemon learn!",

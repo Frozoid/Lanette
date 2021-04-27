@@ -3,8 +3,10 @@ import { ScriptedGame } from "../room-game-scripted";
 import type { GameCommandDefinitions, IGameFile } from "../types/games";
 import type { IPokemon } from "../types/pokemon-showdown";
 
-const data: {pokemon: Dict<readonly string[]>} = {
+const data: {keys: string[], pokemon: Dict<readonly string[]>, pokemonByType: Dict<string[]>} = {
+	keys: [],
 	pokemon: {},
+	pokemonByType: {},
 };
 
 const banlist = ['giratina'];
@@ -12,53 +14,86 @@ const banlist = ['giratina'];
 class MachopsMatchups extends ScriptedGame {
 	canAttack: boolean = false;
 	canLateJoin = true;
+	inverseTypes: boolean = false;
 	maxPoints: number = 10;
 	playerPokemon = new Map<Player, IPokemon>();
 	points = new Map<Player, number>();
 	roundActions = new Set<Player>();
 	usedPokemon: string[] = [];
+	sharedType: string | null = null;
 
 	// set once the game starts
 	currentPokemon!: IPokemon;
 
 	static loadData(): void {
-		const pokemonList = Games.getPokemonList(x => !x.forme && !banlist.includes(x.id) && Dex.hasGifData(x) && x.types.length > 1 &&
+		const pokemonList = Games.getPokemonList(x => !x.forme && !banlist.includes(x.id) && Dex.hasModelData(x) && x.types.length > 1 &&
 			!x.types.includes('Steel') && !x.types.includes('Normal'));
 
 		for (const pokemon of pokemonList) {
+			data.keys.push(pokemon.name);
 			data.pokemon[pokemon.name] = pokemon.types;
+
+			if (pokemon.types.length > 1) {
+				for (const type of pokemon.types) {
+					if (!(type in data.pokemonByType)) data.pokemonByType[type] = [];
+					data.pokemonByType[type].push(pokemon.name);
+				}
+			}
 		}
+	}
+
+	getPokemonChoices(): string[] {
+		return this.sharedType ? data.pokemonByType[this.sharedType] : data.keys;
 	}
 
 	onAddPlayer(player: Player, lateJoin?: boolean): boolean {
 		if (lateJoin) {
-			const pokedex = this.shuffle(Object.keys(data.pokemon));
+			const pokedex = this.shuffle(this.getPokemonChoices());
 			while (this.usedPokemon.includes(pokedex[0]) && pokedex.length) {
 				pokedex.shift();
 			}
 			if (this.usedPokemon.includes(pokedex[0])) return false;
-			this.playerPokemon.set(player, Dex.getExistingPokemon(pokedex[0]));
-			this.usedPokemon.push(pokedex[0]);
-			player.say("You have been randomly assigned " + pokedex[0] + "!");
+
+			this.assignPokemon(player, pokedex[0]);
+			pokedex.shift();
 		}
 
 		return true;
 	}
 
+	onSignups(): void {
+		if (this.sharedType) {
+			this.say("All assigned Pokemon will be part-" + this.sharedType + "!");
+			const availablePokemon = data.pokemonByType[this.sharedType].length;
+			if (!this.playerCap || this.playerCap > availablePokemon) this.playerCap = availablePokemon;
+		}
+	}
+
 	onStart(): void {
 		this.say("Now PMing Pokemon!");
 
-		const pokedex = this.shuffle(Object.keys(data.pokemon));
+		const pokedex = this.shuffle(this.getPokemonChoices());
 		for (const id in this.players) {
-			const player = this.players[id];
-			const pokemon = pokedex[0];
+			this.assignPokemon(this.players[id], pokedex[0]);
 			pokedex.shift();
-			this.playerPokemon.set(player, Dex.getExistingPokemon(pokemon));
-			this.usedPokemon.push(pokemon);
-			player.say("You have been randomly assigned " + pokemon + "!");
 		}
 
 		this.nextRound();
+	}
+
+	assignPokemon(player: Player, species: string): void {
+		this.usedPokemon.push(species);
+
+		const pokemon = Dex.getExistingPokemon(species);
+		this.playerPokemon.set(player, pokemon);
+		player.say("You have been randomly assigned:");
+		player.sayHtml(this.getPokemonHtml(pokemon));
+	}
+
+	getPokemonHtml(pokemon: IPokemon): string {
+		return "<center>" + Dex.getPokemonModel(pokemon) + "<br /><b>" + pokemon.name +
+			"</b><br />" + Dex.getTypeHtml(Dex.getExistingType(pokemon.types[0])) + "&nbsp;/&nbsp;" +
+			Dex.getTypeHtml(Dex.getExistingType(pokemon.types[1])) + "</center>";
 	}
 
 	onNextRound(): void {
@@ -68,15 +103,14 @@ class MachopsMatchups extends ScriptedGame {
 			return;
 		}
 
-		this.currentPokemon = Dex.getExistingPokemon(this.sampleOne(Object.keys(data.pokemon)));
+		this.currentPokemon = Dex.getExistingPokemon(this.sampleOne(data.keys));
 		this.roundActions.clear();
+
 		const roundHtml = this.getRoundHtml(players => this.getPlayerPoints(players));
 		const roundUhtmlName = this.uhtmlBaseName + '-round-html';
 		this.onUhtml(roundUhtmlName, roundHtml, () => {
 			this.timeout = setTimeout(() => {
-				const pokemonHtml = "<center>" + Dex.getPokemonGif(this.currentPokemon) + "<br /><b>" + this.currentPokemon.name +
-					"</b><br />" + Dex.getTypeHtml(Dex.getExistingType(this.currentPokemon.types[0])) + "&nbsp;/&nbsp;" +
-					Dex.getTypeHtml(Dex.getExistingType(this.currentPokemon.types[1])) + "</center>";
+				const pokemonHtml = this.getPokemonHtml(this.currentPokemon);
 				const pokemonUhtmlName = this.uhtmlBaseName + '-pokemon';
 				this.onUhtml(pokemonUhtmlName, pokemonHtml, () => {
 					this.canAttack = true;
@@ -99,14 +133,13 @@ class MachopsMatchups extends ScriptedGame {
 
 const commands: GameCommandDefinitions<MachopsMatchups> = {
 	attack: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canAttack || this.roundActions.has(this.players[user.id])) return false;
 			const player = this.players[user.id];
 			this.roundActions.add(player);
 			const pokemon = this.playerPokemon.get(player)!;
 
-			const winner = Games.getMatchupWinner(pokemon, this.currentPokemon);
+			const winner = Games.getMatchupWinner(pokemon, this.currentPokemon, this.inverseTypes);
 
 			if (winner === pokemon) {
 				let points = this.points.get(player) || 0;
@@ -135,6 +168,7 @@ const commands: GameCommandDefinitions<MachopsMatchups> = {
 
 export const game: IGameFile<MachopsMatchups> = {
 	aliases: ["machops", "matchups"],
+	category: 'luck',
 	class: MachopsMatchups,
 	commands,
 	commandDescriptions: [Config.commandCharacter + 'attack'],
@@ -143,4 +177,91 @@ export const game: IGameFile<MachopsMatchups> = {
 	name: "Machop's Matchups",
 	mascot: "Machop",
 	scriptedOnly: true,
+	variants: [
+		{
+			name: "Machop's Inverse Matchups",
+			variantAliases: ['inverse'],
+			inverseTypes: true,
+		},
+		{
+			name: "Machop's Bug Matchups",
+			variantAliases: ['bug'],
+			sharedType: 'Bug',
+		},
+		{
+			name: "Machop's Dark Matchups",
+			variantAliases: ['dark'],
+			sharedType: 'Dark',
+		},
+		{
+			name: "Machop's Dragon Matchups",
+			variantAliases: ['dragon'],
+			sharedType: 'Dragon',
+		},
+		{
+			name: "Machop's Electric Matchups",
+			variantAliases: ['electric'],
+			sharedType: 'Electric',
+		},
+		{
+			name: "Machop's Fairy Matchups",
+			variantAliases: ['fairy'],
+			sharedType: 'Fairy',
+		},
+		{
+			name: "Machop's Fighting Matchups",
+			variantAliases: ['fighting'],
+			sharedType: 'Fighting',
+		},
+		{
+			name: "Machop's Fire Matchups",
+			variantAliases: ['fire'],
+			sharedType: 'Fire',
+		},
+		{
+			name: "Machop's Flying Matchups",
+			variantAliases: ['flying'],
+			sharedType: 'Flying',
+		},
+		{
+			name: "Machop's Ghost Matchups",
+			variantAliases: ['ghost'],
+			sharedType: 'Ghost',
+		},
+		{
+			name: "Machop's Grass Matchups",
+			variantAliases: ['grass'],
+			sharedType: 'Grass',
+		},
+		{
+			name: "Machop's Ground Matchups",
+			variantAliases: ['ground'],
+			sharedType: 'Ground',
+		},
+		{
+			name: "Machop's Ice Matchups",
+			variantAliases: ['ice'],
+			sharedType: 'Ice',
+		},
+		{
+			name: "Machop's Poison Matchups",
+			variantAliases: ['poison'],
+			sharedType: 'Poison',
+		},
+		{
+			name: "Machop's Psychic Matchups",
+			variantAliases: ['psychic'],
+			sharedType: 'Psychic',
+		},
+		{
+			name: "Machop's Rock Matchups",
+			variantAliases: ['rock'],
+			sharedType: 'Rock',
+		},
+		{
+			name: "Machop's Water Matchups",
+			variantAliases: ['water'],
+			sharedType: 'Water',
+		},
+	],
 };

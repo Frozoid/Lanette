@@ -26,7 +26,7 @@ class CrustlesCrumblingBlocks extends ScriptedGame {
 		if (this.currentPlayer) {
 			this.say("**" + this.currentPlayer.name + "** did not remove any blocks and has been eliminated from the game! The blocks " +
 				"will now reset.");
-			this.eliminatePlayer(this.currentPlayer, "You did not remove any blocks!");
+			this.eliminatePlayer(this.currentPlayer);
 			this.currentPlayer = null;
 		}
 
@@ -96,7 +96,7 @@ class CrustlesCrumblingBlocks extends ScriptedGame {
 
 	removeLastBlock(player: Player): void {
 		this.say("**" + player.name + "** was forced to remove the last block from the pyramid and has been eliminated from the game!");
-		this.eliminatePlayer(player, "You removed the last block from the pyramid!");
+		this.eliminatePlayer(player);
 		this.currentPlayer = null;
 		this.timeout = setTimeout(() => this.nextRound(), 5 * 1000);
 	}
@@ -116,7 +116,6 @@ class CrustlesCrumblingBlocks extends ScriptedGame {
 
 const commands: GameCommandDefinitions<CrustlesCrumblingBlocks> = {
 	remove: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.players[user.id] !== this.currentPlayer) return false;
 			const player = this.players[user.id];
@@ -139,14 +138,16 @@ const commands: GameCommandDefinitions<CrustlesCrumblingBlocks> = {
 
 export const game: IGameFile<CrustlesCrumblingBlocks> = {
 	aliases: ['crustles', 'ccb'],
-	category: 'strategy',
+	category: 'luck',
 	class: CrustlesCrumblingBlocks,
 	commandDescriptions: [Config.commandCharacter + "remove [number of blocks]"],
 	commands,
 	description: "Players remove blocks from Crustle's pyramid until only one remains. The player forced to remove the final block is " +
 		"eliminated!",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Crustle's Crumbling Blocks",
-	noOneVsOne: true,
 	mascot: "Crustle",
 	scriptedOnly: true,
 };

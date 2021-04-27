@@ -36,6 +36,8 @@ class SableyesTrickHouse extends ScriptedGame {
 	}
 
 	revealTrap(): void {
+		if (this.canLateJoin) this.canLateJoin = false;
+
 		const trap = this.sampleOne(this.roundDoors);
 		const id = Tools.toId(trap);
 		for (const i in this.players) {
@@ -113,7 +115,6 @@ class SableyesTrickHouse extends ScriptedGame {
 
 const commands: GameCommandDefinitions<SableyesTrickHouse> = {
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canSelect || this.roundSelections.has(this.players[user.id])) return false;
 			const player = this.players[user.id];
@@ -147,7 +148,6 @@ const commands: GameCommandDefinitions<SableyesTrickHouse> = {
 
 const tests: GameFileTests<SableyesTrickHouse> = {
 	'should only allow one choice per round': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 4);
 			game.start();
@@ -159,7 +159,6 @@ const tests: GameFileTests<SableyesTrickHouse> = {
 		},
 	},
 	'should eliminate users who pick the trap': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 4);
 			game.start();
@@ -174,7 +173,6 @@ const tests: GameFileTests<SableyesTrickHouse> = {
 		},
 	},
 	'should limit choices to given doors': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 4);
 			game.start();
@@ -190,6 +188,7 @@ const tests: GameFileTests<SableyesTrickHouse> = {
 
 export const game: IGameFile<SableyesTrickHouse> = {
 	aliases: ["sableyes", "th"],
+	category: 'luck',
 	commandDescriptions: [Config.commandCharacter + "select [door]"],
 	commands,
 	class: SableyesTrickHouse,

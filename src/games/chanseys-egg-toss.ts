@@ -6,6 +6,7 @@ import type { User } from "../users";
 
 type AchievementNames = "hotpotatohero";
 
+const maxSpamTosses = 3;
 const hotPotatoHeroTime = 9000;
 
 class ChanseysEggToss extends ScriptedGame {
@@ -19,6 +20,7 @@ class ChanseysEggToss extends ScriptedGame {
 	maxPlayers: number = 20;
 	holdTime: number = 0;
 	roundTimes: number[] = [7000, 8000, 9000, 10000];
+	spamTosses = new Map<Player, number>();
 
 	onRenamePlayer(player: Player): void {
 		if (!this.started || player.eliminated) return;
@@ -27,7 +29,7 @@ class ChanseysEggToss extends ScriptedGame {
 			this.currentHolder = player;
 			this.explodeEgg(reason);
 		} else {
-			this.eliminatePlayer(player, "You cannot change your username!");
+			this.eliminatePlayer(player);
 			this.say(player.name + " was DQed " + reason + "!");
 		}
 	}
@@ -71,9 +73,9 @@ class ChanseysEggToss extends ScriptedGame {
 		const remainingPlayerCount = this.getRemainingPlayerCount();
 		if (remainingPlayerCount < 2) {
 			return this.end();
-		} else if (remainingPlayerCount <= 4) {
-			// this.roundTimes = [5000, 6000, 7000, 8000];
 		}
+
+		this.spamTosses.clear();
 
 		const html = this.getRoundHtml(players => this.getPlayerNames(players));
 		const uhtmlName = this.uhtmlBaseName + '-round-html';
@@ -118,15 +120,22 @@ class ChanseysEggToss extends ScriptedGame {
 
 const commands: GameCommandDefinitions<ChanseysEggToss> = {
 	toss: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canToss) return false;
-			const player = this.players[user.id];
-			if (player !== this.currentHolder) {
-				player.say("You are not holding the egg!");
+			if (this.players[user.id] !== this.currentHolder) {
+				let spamTosses = this.spamTosses.get(this.players[user.id]) || 0;
+				spamTosses++;
+				if (spamTosses === maxSpamTosses) {
+					this.currentHolder = this.players[user.id];
+					this.explodeEgg("for spam tossing");
+				} else {
+					this.spamTosses.set(this.players[user.id], spamTosses);
+				}
+
 				return false;
 			}
 
+			const player = this.players[user.id];
 			const id = Tools.toId(target);
 			if (!(id in this.players) || this.players[id].eliminated) {
 				player.say("You must pass the egg to someone currently in the game!");
@@ -137,6 +146,7 @@ const commands: GameCommandDefinitions<ChanseysEggToss> = {
 				return false;
 			}
 
+			this.spamTosses.delete(player);
 			if (Date.now() - this.holdTime >= hotPotatoHeroTime) this.unlockAchievement(player, ChanseysEggToss.achievements.hotpotatohero);
 			this.giveEgg(this.players[id]);
 			return true;
@@ -147,6 +157,7 @@ const commands: GameCommandDefinitions<ChanseysEggToss> = {
 
 export const game: IGameFile<ChanseysEggToss> = {
 	aliases: ['chanseys', 'eggtoss'],
+	category: 'reaction',
 	class: ChanseysEggToss,
 	commands,
 	commandDescriptions: [Config.commandCharacter + 'toss [player]'],

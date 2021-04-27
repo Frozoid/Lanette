@@ -34,19 +34,19 @@ export class HeadToHead extends ScriptedGame {
 		challengeFormat.options = ScriptedGame.setOptions(challengeFormat, undefined, challengeFormat.variant);
 
 		this.challengeFormat = challengeFormat;
-		this.leftPlayer = this.createPlayer(leftUser)!;
-		this.rightPlayer = this.createPlayer(rightUser)!;
+		this.leftPlayer = this.createPlayer(leftUser);
+		this.rightPlayer = this.createPlayer(rightUser);
 		this.minPlayers = 2;
 		this.name += " (" + challengeFormat.nameWithOptions + ")";
 
 		this.originalModchat = this.room.modchat;
-		this.say("/modchat +");
+		this.room.setModchat("+");
 		if (!leftUser.hasRank(this.room, 'voice')) {
-			this.say("/roomvoice " + leftUser.name);
+			this.room.roomVoice(leftUser.name);
 			this.leftPromotedName = leftUser.id;
 		}
 		if (!rightUser.hasRank(this.room, 'voice')) {
-			this.say("/roomvoice " + rightUser.name);
+			this.room.roomVoice(rightUser.name);
 			this.rightPromotedName = rightUser.id;
 		}
 
@@ -126,9 +126,9 @@ export class HeadToHead extends ScriptedGame {
 	}
 
 	resetModchatAndRanks(): void {
-		this.say("/modchat " + this.originalModchat);
-		if (this.leftPromotedName) this.say("/roomdeauth " + this.leftPromotedName);
-		if (this.rightPromotedName) this.say("/roomdeauth " + this.rightPromotedName);
+		this.room.setModchat(this.originalModchat);
+		if (this.leftPromotedName) this.room.roomDeAuth(this.leftPromotedName);
+		if (this.rightPromotedName) this.room.roomDeAuth(this.rightPromotedName);
 	}
 
 	onEnd(): void {

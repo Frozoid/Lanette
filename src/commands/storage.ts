@@ -14,8 +14,6 @@ const tournamentRankAliases = ['tournamentrank', 'tourrank', 'tournamentpoints',
 const gameRankAliases = ['gamerank', 'gamepoints', 'bits'];
 const addGamePointsAliases = ['addbits', 'addbit', 'abits', 'abit', 'removebits', 'removebit', 'rbits', 'rbit'];
 
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types */
-
 export const commands: BaseCommandDefinitions = {
 	offlinemessage: {
 		command(target, room, user) {
@@ -36,21 +34,12 @@ export const commands: BaseCommandDefinitions = {
 			const message = targets.slice(1).join(',').trim();
 			if (!message.length) return this.say("You must specify a message to send.");
 
-			const maxMessageLength = Storage.getMaxOfflineMessageLength(user);
-			if (message.length > maxMessageLength) return this.say("Your message cannot exceed " + maxMessageLength + " characters.");
 			if (Client.checkFilters(message)) return this.say("Your message contains words that are banned in " + Users.self.name + ".");
 			if (!Storage.storeOfflineMessage(user.name, recipientId, message)) return this.say("Sorry, you have too many messages queued " +
 				"for " + recipient + ".");
 			this.say("Your message has been sent to " + recipient + ".");
 		},
 		aliases: ['mail', 'offlinepm'],
-	},
-	offlinemessages: {
-		command(target, room, user) {
-			if (!this.isPm(room)) return;
-			if (!Storage.retrieveOfflineMessages(user, true)) return this.say("You do not have any offline messages stored.");
-		},
-		aliases: ['readofflinemessages', 'checkofflinemessages', 'readmail', 'checkmail'],
 	},
 	clearofflinemessages: {
 		command(target, room, user) {
@@ -127,9 +116,11 @@ export const commands: BaseCommandDefinitions = {
 				if (Tools.isInteger(id)) {
 					customAmount = parseInt(name.trim());
 					if (customAmount < 0) {
-						return this.say("You must use ``" + Config.commandCharacter + "removepoints`` instead of a negative number.");
+						return this.say("You must use ``" + Config.commandCharacter + (game ? "removebits" : "removepoints") +
+							"`` instead of a negative number.");
 					}
 				} else {
+					if (!Tools.isUsernameLength(id)) return this.say("'" + name.trim() + "' is not a valid username.");
 					users.push(name);
 				}
 			}
@@ -173,13 +164,13 @@ export const commands: BaseCommandDefinitions = {
 			if (remove) {
 				this.say("Removed " + points + " " + pointsName + " from " + userList + ".");
 				if (isPm) {
-					leaderboardRoom.sayCommand("/modnote " + user.name + " removed " + points + " " + pointsName + " from " +
+					leaderboardRoom.modnote(user.name + " removed " + points + " " + pointsName + " from " +
 						userList + ".");
 				}
 			} else {
 				this.say("Added " + points + " " + pointsName + " for " + userList + ".");
 				if (isPm) {
-					leaderboardRoom.sayCommand("/modnote " + user.name + " added " + points + " " + pointsName + " for " +
+					leaderboardRoom.modnote(user.name + " added " + points + " " + pointsName + " for " +
 						userList + ".");
 				}
 			}
@@ -239,7 +230,7 @@ export const commands: BaseCommandDefinitions = {
 					"this command: ``" + Config.commandCharacter + "rank " + room.title + "``.");
 			}
 
-			this.sayCommand("/modnote " + user.name + " awarded " + targetUserName + " " + placeName + " points (" + points + ") for a " +
+			room.modnote(user.name + " awarded " + targetUserName + " " + placeName + " points (" + points + ") for a " +
 				(scheduled ? "scheduled " : "") + players + "-man " + format.name + " tournament");
 
 			Storage.exportDatabase(room.id);
@@ -294,7 +285,7 @@ export const commands: BaseCommandDefinitions = {
 					"To see your total amount, use this command: ``" + Config.commandCharacter + "rank " + room.title + "``.");
 			}
 
-			this.sayCommand("/modnote " + user.name + " awarded " + targetUserName + " missing " + placeName + " points (" + points + ") " +
+			room.modnote(user.name + " awarded " + targetUserName + " missing " + placeName + " points (" + points + ") " +
 				"for a scheduled " + players + "-man " + format.name + " tournament");
 
 			Storage.exportDatabase(room.id);
@@ -678,7 +669,7 @@ export const commands: BaseCommandDefinitions = {
 			const destination = targets[2].trim();
 			if (!Storage.transferData(targetRoom.id, source, destination)) return;
 			this.say("Data from " + source + " in " + targetRoom.title + " has been successfully transferred to " + destination + ".");
-			targetRoom.sayCommand("/modnote " + user.name + " transferred data from " + source + " to " + destination + ".");
+			targetRoom.modnote(user.name + " transferred data from " + source + " to " + destination + ".");
 		},
 	},
 	gameachievements: {
@@ -702,9 +693,10 @@ export const commands: BaseCommandDefinitions = {
 
 			const database = Storage.getDatabase(targetRoom);
 			const unlockedAchievements: string[] = [];
+			const achievements = Games.getAchievements();
 			if (database.gameAchievements && id in database.gameAchievements) {
 				for (const achievement of database.gameAchievements[id]) {
-					if (achievement in Games.achievements) unlockedAchievements.push(Games.achievements[achievement].name);
+					if (achievement in achievements) unlockedAchievements.push(achievements[achievement].name);
 				}
 			}
 			if (!unlockedAchievements.length) {
@@ -715,6 +707,56 @@ export const commands: BaseCommandDefinitions = {
 				unlockedAchievements.join(", "), targetRoom);
 		},
 		aliases: ['achievements', 'chieves'],
+	},
+	unlockedgameachievements: {
+		command(target, room, user) {
+			if (!this.isPm(room)) return;
+			const targets = target.split(',');
+			const targetRoom = Rooms.search(targets[0]);
+			if (!targetRoom) return this.sayError(['invalidBotRoom', targets[0]]);
+			if (!user.rooms.has(targetRoom)) return this.sayError(['noPmHtmlRoom', targetRoom.title]);
+			if (!Config.allowScriptedGames || !Config.allowScriptedGames.includes(targetRoom.id)) {
+				return this.sayError(['disabledGameFeatures', targetRoom.title]);
+			}
+
+			if (targets.length !== 2) return this.say("You must specify a game achievement.");
+
+			const achievements = Games.getAchievements();
+			const achievementId = Tools.toId(targets[1]);
+			if (!(achievementId in achievements)) return this.say("'" + targets[1].trim() + "' is not a game achievement.");
+
+			const database = Storage.getDatabase(targetRoom);
+			const unlockedAchievements: string[] = [];
+
+			if (database.gameAchievements) {
+				for (const id in database.gameAchievements) {
+					if (database.gameAchievements[id].includes(achievementId)) {
+						const unlockedUser = Users.get(id);
+						let name: string;
+						if (unlockedUser) {
+							name = unlockedUser.name;
+						} else {
+							if (database.gameLeaderboard && id in database.gameLeaderboard.entries) {
+								name = database.gameLeaderboard.entries[id].name;
+							} else {
+								name = id;
+							}
+						}
+						unlockedAchievements.push(name);
+					}
+				}
+			}
+
+			const unlockedAmount = unlockedAchievements.length;
+			if (!unlockedAmount) {
+				return this.say("No one in " + targetRoom.title + " has unlocked " + achievements[achievementId].name + " yet.");
+			}
+
+			this.sayHtml("<b>" + unlockedAmount + "</b> player" + (unlockedAmount > 1 ? "s have" : " has") + " unlocked " +
+				achievements[achievementId].name + " in " + targetRoom.title + ":<br /><br /><details><summary>Player names</summary>" +
+				unlockedAchievements.join(", ") + "</details>", targetRoom);
+		},
+		aliases: ['unlockedachievements', 'unlockedchieves', 'chieved'],
 	},
 	eventlink: {
 		command(target, room, user) {
@@ -942,5 +984,3 @@ export const commands: BaseCommandDefinitions = {
 		},
 	},
 };
-
-/* eslint-enable */

@@ -84,9 +84,10 @@ class ChandeluresCandles extends ScriptedGame {
 			for (const i in this.players) {
 				if (this.players[i].eliminated) continue;
 				const player = this.players[i];
-				this.winners.set(player, 1);
 				const puffs = this.puffs.get(player);
+				this.winners.set(player, puffs || 1);
 				if (!puffs) continue;
+
 				const lives = this.lives.get(player)!;
 				let bits;
 				if (lives < 1) {
@@ -104,7 +105,6 @@ class ChandeluresCandles extends ScriptedGame {
 
 const commands: GameCommandDefinitions<ChandeluresCandles> = {
 	hide: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.roundTarget) return false;
 			const player = this.players[user.id];
@@ -122,7 +122,6 @@ const commands: GameCommandDefinitions<ChandeluresCandles> = {
 		},
 	},
 	puff: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.roundTarget || this.roundActions.has(this.players[user.id])) return false;
 			const player = this.players[user.id];
@@ -146,7 +145,7 @@ const commands: GameCommandDefinitions<ChandeluresCandles> = {
 			if (!targetLives) {
 				if (this.timeout) clearTimeout(this.timeout);
 				this.say(targetPlayer.name + " has been eliminated from the game!");
-				this.eliminatePlayer(targetPlayer, "You ran out of lives!");
+				this.eliminatePlayer(targetPlayer);
 				this.roundTarget = null;
 				this.timeout = setTimeout(() => this.nextRound(), 5000);
 			}

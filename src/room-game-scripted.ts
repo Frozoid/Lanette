@@ -4,14 +4,15 @@ import type { Player } from "./room-activity";
 import { Game } from "./room-game";
 import type { Room } from "./rooms";
 import type {
-	DefaultGameOption,
-	GameCommandListener, GameCommandReturnType, IBattleGameData, IGameAchievement, IGameCommandCountListener, IGameCommandCountOptions,
-	IGameFormat, IGameMode, IGameOptionValues, IGameVariant, IRandomGameAnswer, LoadedGameCommands, PlayerList
+	DefaultGameOption, GameChallenge, GameCommandListener, GameCommandReturnType, IBattleGameData, IGameAchievement,
+	IGameCommandCountListener, IGameCommandCountOptions, IGameFormat, IGameMode, IGameOptionValues, IGameVariant, IRandomGameAnswer,
+	LoadedGameCommands, PlayerList
 } from "./types/games";
 import type { User } from "./users";
 
 const JOIN_BITS = 10;
 const AUTO_START_VOTE_TIME = 5 * 1000;
+const MIN_BOT_CHALLENGE_SPEED = 1;
 
 // base of 0 defaults option to 'off'
 const defaultOptionValues: KeyedDict<DefaultGameOption, IGameOptionValues> = {
@@ -25,7 +26,7 @@ export class ScriptedGame extends Game {
 	autoCloseHtmlPage: boolean = true;
 	awardedBits: boolean = false;
 	canLateJoin: boolean = false;
-	readonly commands = Object.assign(Object.create(null), Games.sharedCommands) as LoadedGameCommands;
+	readonly commands = Object.assign(Object.create(null), Games.getSharedCommands()) as LoadedGameCommands;
 	readonly commandsListeners: IGameCommandCountListener[] = [];
 	inactiveRounds: number = 0;
 	inheritedPlayers: boolean = false;
@@ -35,6 +36,7 @@ export class ScriptedGame extends Game {
 	readonly maxBits: number = 500;
 	notifyRankSignups: boolean = false;
 	parentGame: ScriptedGame | undefined;
+	signupsRefreshed: boolean = false;
 	startTime: number = 0;
 	usesHtmlPage: boolean = false;
 	usesWorkers: boolean = false;
@@ -47,6 +49,8 @@ export class ScriptedGame extends Game {
 	allowChildGameBits?: boolean;
 	readonly battleData?: Map<Room, IBattleGameData>;
 	readonly battleRooms?: string[];
+	botChallengeSpeeds: number[] | null = null;
+	botTurnTimeout?: NodeJS.Timer;
 	commandDescriptions?: string[];
 	isMiniGame?: boolean;
 	lateJoinQueueSize?: number;
@@ -55,6 +59,7 @@ export class ScriptedGame extends Game {
 	noForceEndMessage?: boolean;
 	playerInactiveRoundLimit?: number;
 	queueLateJoins?: boolean;
+	roundTime?: number;
 	shinyMascot?: boolean;
 	startingLives?: number;
 	subGameNumber?: number;
@@ -137,6 +142,30 @@ export class ScriptedGame extends Game {
 		return options;
 	}
 
+	loadChallengeOptions(challenge: GameChallenge, options: Dict<string>): void {
+		if (challenge === 'botchallenge') {
+			if (this.format.botChallenge!.points) this.format.options.points = this.format.botChallenge!.points;
+			if (this.format.botChallenge!.options && this.format.botChallenge!.options.includes('speed') && this.roundTime) {
+				let speed = parseFloat(options.speed);
+				if (isNaN(speed)) {
+					speed = this.roundTime;
+				} else {
+					if (speed < MIN_BOT_CHALLENGE_SPEED) speed = MIN_BOT_CHALLENGE_SPEED;
+					speed = Math.floor(speed * 1000);
+				}
+
+				if (speed >= this.roundTime) {
+					speed = this.roundTime;
+					this.roundTime += 400;
+				}
+
+				this.say("I will be playing at an average speed of " + Tools.toDurationString(speed, {milliseconds: true}) + "!");
+
+				this.botChallengeSpeeds = [speed - 300, speed - 200, speed - 100, speed, speed + 100, speed + 200, speed + 300];
+			}
+		}
+	}
+
 	setUhtmlBaseName(): void {
 		let gameCount: number;
 		if (this.isPm(this.room)) {
@@ -159,6 +188,7 @@ export class ScriptedGame extends Game {
 		this.uhtmlBaseName = (this.isMiniGame ? "mini" : "scripted") + "-" + this.format.id + "-" + gameCount;
 		this.signupsUhtmlName = this.uhtmlBaseName + "-signups";
 		this.joinLeaveButtonUhtmlName = this.uhtmlBaseName + "-join-leave";
+		this.joinLeaveButtonRefreshUhtmlName = this.uhtmlBaseName + "-join-leave-update";
 	}
 
 	onInitialize(format: IGameFormat): void {
@@ -211,9 +241,9 @@ export class ScriptedGame extends Game {
 		}
 	}
 
-	getMascotAndNameHtml(additionalText?: string): string {
+	getMascotAndNameHtml(additionalText?: string, noDescription?: boolean): string {
 		let minigameDescription: string | undefined;
-		if (this.isMiniGame) {
+		if (this.isMiniGame && !noDescription) {
 			minigameDescription = this.getMinigameDescription();
 		}
 
@@ -232,6 +262,16 @@ export class ScriptedGame extends Game {
 		if (commandDescriptions.length) {
 			description += "<br /><b>Command" + (commandDescriptions.length > 1 ? "s" : "") + "</b>: " +
 				commandDescriptions.map(x => "<code>" + x + "</code>").join(", ");
+		}
+
+		if (this.format.voter) {
+			const id = Tools.toId(this.format.voter);
+			const database = Storage.getDatabase(this.room as Room);
+			if (database.gameScriptedBoxes && id in database.gameScriptedBoxes) {
+				const box = database.gameScriptedBoxes[id];
+				this.customBackgroundColor = box.signupsBackground || box.background;
+				this.customButtonColor = box.signupsButtons || box.buttons;
+			}
 		}
 
 		return Games.getScriptedBoxHtml(this.room as Room, this.name, this.format.voter, description, this.mascot, this.shinyMascot,
@@ -273,12 +313,12 @@ export class ScriptedGame extends Game {
 	}
 
 	getHighlightPhrase(): string {
-		return Games.scriptedGameHighlight + " " + this.id;
+		return Games.getScriptedGameHighlight() + " " + this.id;
 	}
 
 	getModeHighlightPhrase(): string {
 		if (!this.format.mode) return "";
-		return Games.scriptedGameHighlight + " " + this.format.mode.id;
+		return Games.getScriptedGameHighlight() + " " + this.format.mode.id;
 	}
 
 	signups(): void {
@@ -288,24 +328,14 @@ export class ScriptedGame extends Game {
 		if (!this.isMiniGame && !this.internalGame) {
 			this.showSignupsHtml = true;
 			this.sayHtml(this.getSignupsHtml());
-			if (!this.format.options.freejoin) this.sayUhtml(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+			if (!this.format.options.freejoin) this.sayUhtml(this.signupsUhtmlName, this.getSignupsPlayersHtml());
+			this.sayUhtml(this.joinLeaveButtonUhtmlName, this.getJoinLeaveHtml(this.format.options.freejoin ? true : false));
 
-			let joinLeaveHtml = "<center>";
-			if (this.format.options.freejoin) {
-				joinLeaveHtml += "<b>This game is free-join!</b>";
-			} else {
-				joinLeaveHtml += Client.getPmSelfButton(Config.commandCharacter + "joingame " + this.room.id, "Join game");
-				joinLeaveHtml += " | ";
-				joinLeaveHtml += Client.getPmSelfButton(Config.commandCharacter + "leavegame " + this.room.id, "Leave game");
-			}
-			joinLeaveHtml += "</center>";
-			this.sayUhtml(this.joinLeaveButtonUhtmlName, joinLeaveHtml);
 			this.notifyRankSignups = true;
-			this.sayCommand("/notifyrank all, " + (this.room as Room).title + " scripted game," + this.name + "," +
-				this.getHighlightPhrase(), true);
+			const room = this.room as Room;
+			room.notifyRank("all", room.title + " scripted game", this.name, this.getHighlightPhrase());
 			if (this.format.mode) {
-				this.sayCommand("/notifyrank all, " + (this.room as Room).title + " scripted game," + this.name + "," +
-					this.getModeHighlightPhrase(), true);
+				room.notifyRank("all", room.title + " scripted game", this.name, this.getModeHighlightPhrase());
 			}
 		}
 
@@ -330,7 +360,10 @@ export class ScriptedGame extends Game {
 				const startTimer = (Config.gameAutoStartTimers[this.room.id] * 60 * 1000) / 2;
 				this.startTimer = setTimeout(() => {
 					if (this.signupsHtmlTimeout) clearTimeout(this.signupsHtmlTimeout);
-					this.sayUhtml(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+
+					this.signupsRefreshed = true;
+					this.sayUhtml(this.signupsUhtmlName, this.getSignupsPlayersHtml());
+					this.sayUhtml(this.joinLeaveButtonRefreshUhtmlName, this.getJoinLeaveHtml(this.format.options.freejoin ? true : false));
 
 					this.startTimer = setTimeout(() => {
 						if (!this.start()) {
@@ -356,10 +389,16 @@ export class ScriptedGame extends Game {
 		if (this.startTimer) clearTimeout(this.startTimer);
 		this.started = true;
 		this.startTime = Date.now();
-		if (this.notifyRankSignups) this.sayCommand("/notifyoffrank all");
+		if (this.notifyRankSignups) (this.room as Room).notifyOffRank("all");
 		if (this.showSignupsHtml) {
 			if (this.signupsHtmlTimeout) clearTimeout(this.signupsHtmlTimeout);
-			this.sayUhtmlChange(this.joinLeaveButtonUhtmlName, "<div></div>");
+			const signupsEndMessage = this.getSignupsEndMessage();
+			if (this.signupsRefreshed) {
+				this.sayUhtmlChange(this.joinLeaveButtonUhtmlName, "<div></div>");
+				this.sayUhtmlChange(this.joinLeaveButtonRefreshUhtmlName, signupsEndMessage);
+			} else {
+				this.sayUhtmlChange(this.joinLeaveButtonUhtmlName, signupsEndMessage);
+			}
 		}
 
 		if (!this.internalGame) this.say(this.name + " is starting! **Players (" + this.playerCount + ")**: " + this.getPlayerNames());
@@ -488,15 +527,15 @@ export class ScriptedGame extends Game {
 		let usedDatabase = false;
 
 		if (this.isMiniGame) {
-			Games.lastMinigames[this.room.id] = now;
+			Games.setLastMinigame(this.room, now);
 		} else if (!this.parentGame && !this.internalGame) {
 			Games.clearNextVoteBans(this.room);
 
 			usedDatabase = true;
 			const database = Storage.getDatabase(this.room);
 
-			Games.lastGames[this.room.id] = now;
-			Games.lastScriptedGames[this.room.id] = now;
+			Games.setLastGame(this.room, now);
+			Games.setLastScriptedGame(this.room, now);
 			database.lastGameTime = now;
 
 			if (!database.lastGameFormatTimes) database.lastGameFormatTimes = {};
@@ -507,6 +546,17 @@ export class ScriptedGame extends Game {
 			while (database.pastGames.length > 8) {
 				database.pastGames.pop();
 			}
+
+			if (!database.scriptedGameStats) database.scriptedGameStats = [];
+			database.scriptedGameStats.push({
+				endTime: now,
+				format: this.format.name,
+				inputTarget: this.format.inputTarget,
+				startingPlayerCount: this.playerCount,
+				endingPlayerCount: this.getRemainingPlayerCount(),
+				startTime: this.signupsTime,
+				winners: Array.from(this.winners.keys()).map(x => x.id),
+			});
 
 			this.setCooldownAndAutoCreate('userhosted');
 		}
@@ -547,10 +597,11 @@ export class ScriptedGame extends Game {
 
 		this.cleanupMessageListeners();
 		if (this.cleanupTimers) this.cleanupTimers();
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
 		if (this.timeout) clearTimeout(this.timeout);
 		if (this.startTimer) clearTimeout(this.startTimer);
 
-		if ((!this.started || this.format.options.freejoin) && this.notifyRankSignups) this.sayCommand("/notifyoffrank all");
+		if ((!this.started || this.format.options.freejoin) && this.notifyRankSignups) (this.room as Room).notifyOffRank("all");
 
 		if (this.onDeallocate) {
 			try {
@@ -566,7 +617,14 @@ export class ScriptedGame extends Game {
 		if (this.parentGame) {
 			this.parentGame.room.game = this.parentGame;
 			this.parentGame.prng = new PRNG(this.prng.seed);
-			if (this.parentGame.onChildEnd) this.parentGame.onChildEnd(this.winners);
+			if (this.parentGame.onChildEnd) {
+				try {
+					this.parentGame.onChildEnd(this.winners);
+				} catch (e) {
+					console.log(e);
+					Tools.logError(e, this.parentGame.format.name + " onChildEnd() (" + this.format.name + ")");
+				}
+			}
 		}
 
 		if (this.onAfterDeallocate) {
@@ -600,7 +658,10 @@ export class ScriptedGame extends Game {
 
 	addPlayer(user: User): Player | undefined {
 		if (this.format.options.freejoin || this.isMiniGame) {
-			user.say("This game does not require you to join.");
+			if (!this.joinNotices.has(user.id)) {
+				user.say("This game does not require you to join.");
+				this.joinNotices.add(user.id);
+			}
 			return;
 		}
 
@@ -675,16 +736,17 @@ export class ScriptedGame extends Game {
 		}
 
 		const bits = this.internalGame ? 0 : this.addBits(player, JOIN_BITS, true);
-		if (!this.internalGame) {
+		if (!this.internalGame && !this.joinNotices.has(user.id)) {
 			player.say("Thanks for joining the " + this.name + " " + this.activityType + "!" + (bits ? " Have some free bits!" : ""));
+			this.joinNotices.add(user.id);
 		}
 
 		if (this.showSignupsHtml && !this.started) {
 			if (!this.signupsHtmlTimeout) {
 				this.signupsHtmlTimeout = setTimeout(() => {
-					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsPlayersHtml());
 					this.signupsHtmlTimeout = null;
-				}, Client.sendThrottle * 2);
+				}, this.getSignupsUpdateDelay());
 			}
 		}
 
@@ -704,8 +766,10 @@ export class ScriptedGame extends Game {
 		const player = this.destroyPlayer(user);
 		if (!player) return;
 
-		if (!silent) {
-			player.say("You have left the " + this.name + " " + this.activityType + ".");
+		const id = typeof user === 'string' ? Tools.toId(user) : user.id;
+		if (!silent && !this.leaveNotices.has(id)) {
+			player.say("You have left the " + this.name + " " + this.activityType + ". You will not receive any further signups messages.");
+			this.leaveNotices.add(id);
 		}
 
 		if (this.format.options.freejoin) return;
@@ -713,9 +777,9 @@ export class ScriptedGame extends Game {
 		if (this.showSignupsHtml && !this.started) {
 			if (!this.signupsHtmlTimeout) {
 				this.signupsHtmlTimeout = setTimeout(() => {
-					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsHtmlUpdate());
+					this.sayUhtmlChange(this.signupsUhtmlName, this.getSignupsPlayersHtml());
 					this.signupsHtmlTimeout = null;
-				}, Client.sendThrottle * 2);
+				}, this.getSignupsUpdateDelay());
 			}
 		}
 
@@ -750,13 +814,13 @@ export class ScriptedGame extends Game {
 		return false;
 	}
 
-	eliminatePlayer(player: Player, eliminationCause?: string | null, eliminator?: Player | null): void {
+	eliminatePlayer(player: Player, eliminationMessage?: string | null, eliminator?: Player | null): void {
 		player.eliminated = true;
-		player.say((eliminationCause ? eliminationCause + " " : "") + "You have been eliminated from the game.");
+		if (eliminationMessage) player.say(eliminationMessage + " You have been eliminated from the game.");
 
 		if (this.onEliminatePlayer) {
 			try {
-				this.onEliminatePlayer(player, eliminationCause, eliminator);
+				this.onEliminatePlayer(player, eliminator);
 			} catch (e) {
 				console.log(e);
 				Tools.logError(e, this.format.name + " onEliminatePlayer()");
@@ -912,6 +976,8 @@ export class ScriptedGame extends Game {
 
 		bits = Math.floor(bits);
 		if (bits <= 0) return false;
+		// eslint-disable-next-line @typescript-eslint/no-extra-parens
+		if (Config.afd) bits *= (this.random(50) + 1);
 
 		if (!achievementBits) {
 			if (bits > this.maxBits) bits = this.maxBits;
@@ -1031,6 +1097,7 @@ export class ScriptedGame extends Game {
 	}
 
 	acceptChallenge?(user: User): boolean;
+	botChallengeTurn?(botPlayer: Player, newAnswer: boolean): void;
 	cancelChallenge?(user: User): boolean;
 	cleanupTimers?(): void;
 	getForceEndMessage?(): string;
@@ -1057,8 +1124,10 @@ export class ScriptedGame extends Game {
 	onBattleSwitch?(room: Room, pokemon: string, details: string, hpStatus: [string, string]): boolean;
 	onBattleWin?(room: Room, winner: string): void;
 	onChildEnd?(winners: Map<Player, number>): void;
+	onChildHint?(hint: string, answers: readonly string[], newAnswer: boolean): void;
+	onChildPlayerTurn?(player: Player): void;
 	onDeallocate?(forceEnd: boolean): void;
-	onEliminatePlayer?(player: Player, eliminationCause?: string | null, eliminator?: Player | null): void;
+	onEliminatePlayer?(player: Player, eliminator?: Player | null): void;
 	onMaxRound?(): void;
 	onNextRound?(): void;
 	onRemovePlayer?(player: Player): void;
@@ -1069,5 +1138,5 @@ export class ScriptedGame extends Game {
 	parseChatMessage?(user: User, message: string): void;
 	rejectChallenge?(user: User): boolean;
 	repostInformation?(): void;
-	setupChallenge?(challenger: User, challenged: User, format: IGameFormat): void;
+	setupChallenge?(challenger: User, challenged: User, format: IGameFormat, options?: Dict<string>): void;
 }

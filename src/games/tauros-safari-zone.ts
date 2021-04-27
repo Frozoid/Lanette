@@ -35,14 +35,14 @@ class TaurosSafariZone extends ScriptedGame {
 	winners = new Map<Player, number>();
 
 	static loadData(): void {
-		const pokemonList = Games.getPokemonList(pokemon => Dex.hasGifData(pokemon) && pokemon.id !== 'voltorb' &&
+		const pokemonList = Games.getPokemonList(pokemon => Dex.hasModelData(pokemon) && pokemon.id !== 'voltorb' &&
 			pokemon.id !== 'electrode');
 		const listWithFormes = pokemonList.slice();
 		for (const pokemon of pokemonList) {
 			if (pokemon.otherFormes) {
 				for (const name of pokemon.otherFormes) {
 					const forme = Dex.getExistingPokemon(name);
-					if (Dex.hasGifData(forme)) listWithFormes.push(forme);
+					if (Dex.hasModelData(forme)) listWithFormes.push(forme);
 				}
 			}
 		}
@@ -96,7 +96,7 @@ class TaurosSafariZone extends ScriptedGame {
 		this.highestBST = baseStatTotals[0].pokemon;
 		let html = "<div class='infobox'><center>";
 		for (const pokemon of pokemonList) {
-			html += Dex.getPokemonGif(pokemon);
+			html += Dex.getPokemonModel(pokemon);
 		}
 		html += "<br />Wild <b>" + pokemonList.map(x => x.name).join(", ") + "</b> appeared!</center></div>";
 		const uhtmlName = this.uhtmlBaseName + '-pokemon';
@@ -178,7 +178,7 @@ class TaurosSafariZone extends ScriptedGame {
 			if (this.players[i].eliminated) continue;
 			const player = this.players[i];
 			const points = this.points.get(player);
-			if (points && points >= this.maxPoints) this.winners.set(player, 1);
+			if (points && points >= this.maxPoints) this.winners.set(player, points);
 			if (this.firstCatch && player === this.firstCatch) this.unlockAchievement(player, TaurosSafariZone.achievements.pokemonranger);
 		}
 
@@ -189,7 +189,6 @@ class TaurosSafariZone extends ScriptedGame {
 
 const commands: GameCommandDefinitions<TaurosSafariZone> = {
 	catch: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canCatch) return false;
 			const player = this.createPlayer(user) || this.players[user.id];

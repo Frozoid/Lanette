@@ -20,7 +20,7 @@ if (testOptions.games) {
 		formatsToTest.push(Games.getExistingFormat(game));
 	}
 } else {
-	for (const i in Games.formats) {
+	for (const i in Games.getFormats()) {
 		formatsToTest.push(Games.getExistingFormat(i));
 	}
 }
@@ -124,8 +124,9 @@ for (const format of formatsToTest) {
 	}
 }
 
-for (const i in Games.modes) {
-	const mode = Games.modes[i];
+const modes = Games.getModes();
+for (const i in modes) {
+	const mode = modes[i];
 	if (mode.tests) {
 		const formats: string[] = [];
 		for (const format of formatsToTest) {
@@ -152,13 +153,13 @@ for (const i in Games.modes) {
 
 describe("Games", () => {
 	it('should load data properly', () => {
-		assert(Object.keys(Games.aliases).length);
-		assert(Object.keys(Games.formats).length);
-		assert(Object.keys(Games.internalFormats).length);
-		assert(Object.keys(Games.modes).length);
-		assert(Object.keys(Games.modeAliases).length);
-		assert(Object.keys(Games.userHostedFormats).length);
-		assert(Object.keys(Games.userHostedAliases).length);
+		assert(Object.keys(Games.getAliases()).length);
+		assert(Object.keys(Games.getFormats()).length);
+		assert(Object.keys(Games.getInternalFormats()).length);
+		assert(Object.keys(Games.getModes()).length);
+		assert(Object.keys(Games.getModeAliases()).length);
+		assert(Object.keys(Games.getUserHostedFormats()).length);
+		assert(Object.keys(Games.getUserHostedAliases()).length);
 	});
 
 	it('should export valid data from files', () => {
@@ -192,7 +193,7 @@ describe("Games", () => {
 			}
 		}
 
-		for (const i in Games.userHostedFormats) {
+		for (const i in Games.getUserHostedFormats()) {
 			const format = Games.getExistingUserHostedFormat(i);
 			testMascots(format);
 			assert(!format.name.match(Tools.unsafeApiCharacterRegex), format.name + " name");
@@ -201,12 +202,12 @@ describe("Games", () => {
 	});
 
 	it('should only be defined in one location (scripted vs. user-hosted)', () => {
-		for (const i in Games.userHostedFormats) {
+		for (const i in Games.getUserHostedFormats()) {
 			assert(Array.isArray(Games.getFormat(i)), Games.getExistingUserHostedFormat(i).name);
 		}
 	});
 
-	it('should create games properly', function(this: Mocha.Context) {
+	it('should create games properly', () => {
 		for (const format of formatsToTest) {
 			try {
 				Games.createGame(room, format, room, false, initialSeed);
@@ -218,8 +219,8 @@ describe("Games", () => {
 		}
 
 		const formatsByMode: Dict<string[]> = {};
-		for (const i in Games.modes) {
-			const mode = Games.modes[i];
+		for (const i in modes) {
+			const mode = modes[i];
 			formatsByMode[mode.id] = [];
 			for (const format of formatsToTest) {
 				if (format.modes && format.modes.includes(mode.id)) formatsByMode[mode.id].push(format.id);
@@ -241,7 +242,7 @@ describe("Games", () => {
 		}
 	});
 
-	it('should support setting the initial PRNG seed', function(this: Mocha.Context) {
+	it('should support setting the initial PRNG seed', () => {
 		const prng = new PRNG();
 		for (const format of formatsToTest) {
 			const game = Games.createGame(room, format, room, false, prng.initialSeed.slice() as PRNGSeed);
@@ -253,8 +254,11 @@ describe("Games", () => {
 	});
 
 	it('should return proper values from getFormat() and getUserHostedFormat()', () => {
-		const formats = Object.keys(Games.formats);
-		assert(!Array.isArray(Games.getFormat(formats[0])));
+		const formats = Games.getFormats();
+		const userHostedFormats = Games.getUserHostedFormats();
+
+		const formatKeys = Object.keys(formats);
+		assert(!Array.isArray(Games.getFormat(formatKeys[0])));
 
 		assertStrictEqual(Games.getExistingFormat("Slowking's Trivia").name, "Slowking's Trivia");
 		assertStrictEqual(Games.getExistingFormat('trivia').name, "Slowking's Trivia");
@@ -274,7 +278,7 @@ describe("Games", () => {
 		assertStrictEqual(Games.getExistingFormat('params,params:3').inputOptions.params, 3);
 		assert(!Games.getExistingFormat('params').inputOptions.params);
 
-		assert(!Array.isArray(Games.getUserHostedFormat(Object.keys(Games.userHostedFormats)[0])));
+		assert(!Array.isArray(Games.getUserHostedFormat(Object.keys(userHostedFormats)[0])));
 		assertStrictEqual(Games.getExistingUserHostedFormat('floettes forum game, name: Mocha Test Game').name, 'Mocha Test Game');
 
 		const name = 'Non-existent Game';
@@ -283,10 +287,10 @@ describe("Games", () => {
 		assertStrictEqual(nameFormat[0], 'invalidGameFormat');
 		assertStrictEqual(nameFormat[1], name);
 
-		for (const formatId of formats) {
-			const formatData = Games.formats[formatId];
+		for (const key of formatKeys) {
+			const formatData = formats[key];
 			if (formatData.modes && formatData.modes.length >= 2) {
-				const modesFormat = Games.getFormat(formatId + "," + formatData.modes[0] + "," + formatData.modes[1]);
+				const modesFormat = Games.getFormat(key + "," + formatData.modes[0] + "," + formatData.modes[1]);
 				assert(Array.isArray(modesFormat));
 				assertStrictEqual(modesFormat[0], 'tooManyGameModes');
 				assertStrictEqual(modesFormat[1], undefined);
@@ -294,10 +298,10 @@ describe("Games", () => {
 			}
 		}
 
-		for (const formatId of formats) {
-			const formatData = Games.formats[formatId];
+		for (const key of formatKeys) {
+			const formatData = formats[key];
 			if (formatData.variants && formatData.variants.length >= 2) {
-				const variantsFormat = Games.getFormat(formatId + "," + formatData.variants[0].variantAliases[0] + "," +
+				const variantsFormat = Games.getFormat(key + "," + formatData.variants[0].variantAliases[0] + "," +
 					formatData.variants[1].variantAliases[0]);
 				assert(Array.isArray(variantsFormat));
 				assertStrictEqual(variantsFormat[0], 'tooManyGameVariants');
@@ -307,12 +311,12 @@ describe("Games", () => {
 		}
 
 		const option = "Non-existent option";
-		const optionFormat = Games.getFormat(formats[0] + "," + option);
+		const optionFormat = Games.getFormat(formatKeys[0] + "," + option);
 		assert(Array.isArray(optionFormat));
 		assertStrictEqual(optionFormat[0], 'invalidGameOption');
 		assertStrictEqual(optionFormat[1], option);
 
-		assert(!Array.isArray(Games.getUserHostedFormat(Object.keys(Games.userHostedFormats)[0])));
+		assert(!Array.isArray(Games.getUserHostedFormat(Object.keys(userHostedFormats)[0])));
 
 		const nameUserHostedFormat = Games.getUserHostedFormat(name);
 		assert(Array.isArray(nameUserHostedFormat));
@@ -320,12 +324,12 @@ describe("Games", () => {
 		assertStrictEqual(nameUserHostedFormat[1], name);
 	});
 
-	it('should start signups for scripted games', function(this: Mocha.Context) {
+	it('should start signups for scripted games', () => {
 		const roomPrefix = room.id + "|";
 		for (const format of formatsToTest) {
 			if (format.tournamentGame) continue;
 
-			const startingSendQueueIndex = Client.outgoingMessageQueue.length;
+			const startingSendQueueIndex = Client.getOutgoingMessageQueue().length;
 			const gameLog: string[] = [];
 			const game = Games.createGame(room, format);
 			assert(game, format.name);
@@ -335,7 +339,7 @@ describe("Games", () => {
 			if (game.mascot) game.shinyMascot = true;
 			game.signups();
 			gameLog.push(roomPrefix + "/addhtmlbox " + game.getSignupsHtml());
-			gameLog.push(roomPrefix + "/notifyrank all, Mocha scripted game," + game.name + "," + game.getHighlightPhrase());
+			gameLog.push(roomPrefix + "/notifyrank all,Mocha scripted game," + game.name + "," + game.getHighlightPhrase());
 			if (game.mascot) gameLog.push(roomPrefix + game.mascot.name + " is shiny so bits will be doubled!");
 
 			assertClientSendQueue(startingSendQueueIndex, gameLog);
@@ -346,26 +350,26 @@ describe("Games", () => {
 	it('should start signups for user-hosted games', () => {
 		const roomPrefix = room.id + "|";
 		const userHostedFormats: IUserHostedFormat[] = [];
-		for (const i in Games.userHostedFormats) {
+		for (const i in Games.getUserHostedFormats()) {
 			userHostedFormats.push(Games.getExistingUserHostedFormat(i));
 		}
-		for (const i in Games.formats) {
+		for (const i in Games.getFormats()) {
 			const format = Games.getExistingFormat(i);
 			if (!format.scriptedOnly) userHostedFormats.push(Games.getExistingUserHostedFormat(i));
 		}
 
 		for (const format of userHostedFormats) {
-			const startingSendQueueIndex = Client.outgoingMessageQueue.length;
+			const startingSendQueueIndex = Client.getOutgoingMessageQueue().length;
 
 			const gameLog: string[] = [];
-			const game = Games.createUserHostedGame(room, format, Users.self.name);
+			const game = Games.createUserHostedGame(room, format, Users.self.name, true);
 			assert(game, format.name);
 			assert(!game.signupsStarted, format.name);
 			assert(!game.started, format.name);
 			assertStrictEqual(game.format.name, format.name);
 			game.signups();
 			gameLog.push(roomPrefix + "/addhtmlbox " + game.getSignupsHtml());
-			gameLog.push(roomPrefix + "/notifyrank all, Mocha user-hosted game," + game.name + "," + game.hostId + " " +
+			gameLog.push(roomPrefix + "/notifyrank all,Mocha user-hosted game," + game.name + "," + game.hostId + " " +
 				game.getHighlightPhrase());
 
 			assertClientSendQueue(startingSendQueueIndex, gameLog);
@@ -373,16 +377,16 @@ describe("Games", () => {
 		}
 	});
 
-	it('should properly start one vs. one challenges', function(this: Mocha.Context) {
+	it('should properly start one vs. one challenges', () => {
 		const challenger = Users.add("Challenger", "challenger");
 		const defender = Users.add("Defender", "defender");
-		room.onUserJoin(challenger, ' ' );
-		room.onUserJoin(defender, ' ' );
+		room.onUserJoin(challenger, ' ');
+		room.onUserJoin(defender, ' ');
 
 		const oneVsOneFormat = Games.getInternalFormat('onevsone') as IGameFormat;
 
 		for (const format of formatsToTest) {
-			if (format.noOneVsOne) continue;
+			if (format.disallowedChallenges && format.disallowedChallenges.onevsone) continue;
 
 			const parentGame = Games.createGame(room, oneVsOneFormat) as OneVsOne;
 			assert(parentGame, format.name);
@@ -407,6 +411,44 @@ describe("Games", () => {
 			assert(parentGame.acceptChallenge(defender), format.name);
 			assert(parentGame.started, format.name);
 			parentGame.nextRound();
+			const childGame = room.game;
+			assert(childGame, format.name);
+			assertStrictEqual(childGame.parentGame, parentGame);
+			assert(childGame.signupsStarted, format.name);
+			assertStrictEqual(childGame.players[challengerPlayer.id], challengerPlayer);
+			assertStrictEqual(childGame.players[defenderPlayer.id], defenderPlayer);
+			assert(childGame.inheritedPlayers, format.name);
+			if (!format.freejoin) childGame.start();
+
+			childGame.deallocate(true);
+		}
+	});
+
+	it('should properly start bot challenges', () => {
+		const challenger = Users.add("Challenger", "challenger");
+		room.onUserJoin(challenger, ' ');
+		room.onUserJoin(Users.self, ' ');
+
+		const botChallengeFormat = Games.getInternalFormat('botchallenge') as IGameFormat;
+
+		for (const format of formatsToTest) {
+			if (!format.botChallenge || !format.botChallenge.enabled) continue;
+
+			const parentGame = Games.createGame(room, botChallengeFormat) as OneVsOne;
+			assert(parentGame, format.name);
+			assert(!parentGame.signupsStarted, format.name);
+			assert(!parentGame.started, format.name);
+			assertStrictEqual(parentGame.format.name, botChallengeFormat.name);
+
+			parentGame.setupChallenge(challenger, Users.self, format);
+			const challengerPlayer = parentGame.challenger;
+			const defenderPlayer = parentGame.defender;
+			assert(challengerPlayer, format.name);
+			assert(defenderPlayer, format.name);
+			assertStrictEqual(parentGame.challengeFormat, format);
+			assert(!parentGame.started, format.name);
+
+			parentGame.acceptChallenge(Users.self);
 			const childGame = room.game;
 			assert(childGame, format.name);
 			assertStrictEqual(childGame.parentGame, parentGame);
@@ -507,12 +549,12 @@ describe("Games", () => {
 		const normalTypeMove = Dex.getExistingMove('Tackle');
 		const ghostTypePokemon = Dex.getExistingPokemon('Duskull');
 
-		assertStrictEqual(Games.getEffectivenessScore('Normal', 'Ghost'), 0.001);
-		assertStrictEqual(Games.getEffectivenessScore('Normal', ['Ghost']), 0.001);
-		assertStrictEqual(Games.getEffectivenessScore('Normal', ghostTypePokemon), 0.001);
-		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, 'Ghost'), 0.001);
-		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, ['Ghost']), 0.001);
-		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, ghostTypePokemon), 0.001);
+		assertStrictEqual(Games.getEffectivenessScore('Normal', 'Ghost'), 0.125);
+		assertStrictEqual(Games.getEffectivenessScore('Normal', ['Ghost']), 0.125);
+		assertStrictEqual(Games.getEffectivenessScore('Normal', ghostTypePokemon), 0.125);
+		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, 'Ghost'), 0.125);
+		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, ['Ghost']), 0.125);
+		assertStrictEqual(Games.getEffectivenessScore(normalTypeMove, ghostTypePokemon), 0.125);
 	});
 	it('should return proper values from getCombinedEffectivenessScore()', () => {
 		const waterType = Dex.getExistingPokemon('Squirtle');
@@ -520,30 +562,43 @@ describe("Games", () => {
 		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, 'Fire'), 2);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, ['Fire']), 2);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, fireType), 2);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, 'Fire', true), 0.5);
 
 		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, ['Rock', 'Ground']), 4);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, Dex.getExistingPokemon('Golem')), 4);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(waterType, ['Rock', 'Ground'], true), 0.25);
 
 		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, 'Water'), 0.5);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, ['Water']), 0.5);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, waterType), 0.5);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, 'Water', true), 2);
 
 		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, ['Rock', 'Fire']), 0.25);
 		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, Dex.getExistingPokemon('Magcargo')), 0.25);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(fireType, ['Rock', 'Fire'], true), 4);
 
 		const normalType = Dex.getExistingPokemon('Rattata');
-		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, 'Ghost'), 0.001);
-		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, ['Ghost']), 0.001);
-		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, Dex.getExistingPokemon('Duskull')), 0.001);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, 'Ghost'), 0.125);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, ['Ghost']), 0.125);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, Dex.getExistingPokemon('Duskull')), 0.125);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, 'Ghost', true), 2);
 
-		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, ['Dark', 'Ghost']), 0.001);
-		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, Dex.getExistingPokemon('Spiritomb')), 0.001);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, ['Dark', 'Ghost']), 0.125);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, Dex.getExistingPokemon('Spiritomb')), 0.125);
+
+		assertStrictEqual(Games.getCombinedEffectivenessScore(normalType, ['Rock', 'Ghost'], true), 2);
+
+		assertStrictEqual(Games.getCombinedEffectivenessScore(Dex.getExistingPokemon("Oranguru"), Dex.getExistingPokemon("Gengar")),
+			0.25);
+		assertStrictEqual(Games.getCombinedEffectivenessScore(Dex.getExistingPokemon("Gengar"), Dex.getExistingPokemon("Oranguru")),
+			0.125);
 	});
 	it('should return proper values from getMatchupWinner()', () => {
 		const waterType = Dex.getExistingPokemon('Squirtle');
 		const fireType = Dex.getExistingPokemon('Charmander');
 		assertStrictEqual(Games.getMatchupWinner(waterType, fireType), waterType);
 		assertStrictEqual(Games.getMatchupWinner(waterType, Dex.getExistingPokemon('Golem')), waterType);
+		assertStrictEqual(Games.getMatchupWinner(waterType, fireType, true), fireType);
 
 		const rockFireType = Dex.getExistingPokemon('Magcargo');
 		assertStrictEqual(Games.getMatchupWinner(fireType, waterType), waterType);
@@ -552,7 +607,10 @@ describe("Games", () => {
 		const normalType = Dex.getExistingPokemon('Rattata');
 		assertStrictEqual(Games.getMatchupWinner(normalType, rockFireType), rockFireType);
 		assertStrictEqual(Games.getMatchupWinner(normalType, waterType), null);
-		assertStrictEqual(Games.getMatchupWinner(normalType, Dex.getExistingPokemon('Duskull')), null);
+
+		const ghostType = Dex.getExistingPokemon('Duskull');
+		assertStrictEqual(Games.getMatchupWinner(normalType, ghostType), null);
+
 		assertStrictEqual(Games.getMatchupWinner(normalType, Dex.getExistingPokemon('Spiritomb')), null);
 	});
 });

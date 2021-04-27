@@ -1,4 +1,6 @@
-import type { HexCode } from "./tools";
+import type { IPokemonPick } from "../html-pages/components/pokemon-picker-base";
+import type { TrainerSpriteId } from "./dex";
+import type { HexCode, TimeZone } from "./tools";
 
 interface IEventInformation {
 	name: string;
@@ -37,32 +39,29 @@ export interface IPastGame {
 	time: number;
 }
 
-export interface IUserHostedGameStats {
-	endTime: number;
-	format: string;
-	inputTarget: string;
-	playerCount: number;
-	startTime: number;
-}
-
 export interface IGameTrainerCard {
-	avatar: string;
 	pokemon: string[];
+	avatar?: TrainerSpriteId;
 	background?: HexCode;
 	pokemonGifs?: boolean;
 }
 
 export interface IGameHostBox {
-	pokemon: string[];
-	shinyPokemon: boolean[];
+	pokemon: IPokemonPick[];
+	avatar?: TrainerSpriteId;
 	background?: HexCode;
 	buttons?: HexCode;
+	signupsBackground?: HexCode;
+	signupsButtons?: HexCode;
 }
 
 export interface IGameScriptedBox {
 	pokemon: string[];
 	background?: HexCode;
 	buttons?: HexCode;
+	signupsBackground?: HexCode;
+	signupsButtons?: HexCode;
+	previewFormat?: string;
 }
 
 export type UserHostStatus = 'unapproved' | 'novice' | 'approved';
@@ -80,6 +79,29 @@ export interface ICachedLeaderboardEntry {
 	points: number;
 }
 
+export interface IGameStat {
+	format: string;
+	inputTarget: string;
+	startingPlayerCount: number;
+	endingPlayerCount: number;
+	startTime: number;
+	endTime: number;
+	winners: string[];
+}
+
+interface ILastCycleData {
+	scriptedGameStats?: IGameStat[];
+	userHostedGameStats?: Dict<IGameStat[]>;
+}
+
+interface IQueuedTournament {
+	formatid: string;
+	playerCap: number;
+	scheduled: boolean;
+	time: number;
+	tournamentName?: string;
+}
+
 export interface IDatabase {
 	botGreetings?: Dict<IBotGreeting>;
 	eventInformation?: Dict<IEventInformation>;
@@ -89,6 +111,7 @@ export interface IDatabase {
 	gameHostBoxes?: Dict<IGameHostBox>;
 	gameScriptedBoxes?: Dict<IGameScriptedBox>;
 	gameTrainerCards?: Dict<IGameTrainerCard>;
+	lastCycleData?: ILastCycleData;
 	lastGameFormatTimes?: Dict<number>;
 	lastGameTime?: number;
 	lastTournamentFormatTimes?: Dict<number>;
@@ -100,15 +123,15 @@ export interface IDatabase {
 	pastGames?: IPastGame[];
 	pastTournaments?: IPastTournament[];
 	pastUserHostedGames?: IPastGame[];
-	previousUserHostedGameStats?: Dict<IUserHostedGameStats[]>;
-	queuedTournament?: {formatid: string; playerCap: number; scheduled: boolean; time: number};
+	queuedTournament?: IQueuedTournament;
 	roomSampleTeamsLink?: string;
 	scriptedGameCounts?: Dict<number>;
+	scriptedGameStats?: IGameStat[];
 	thcWinners?: Dict<string>;
 	tournamentLeaderboard?: ILeaderboard;
 	unsortedLeaderboard?: ILeaderboard;
 	userHostedGameCounts?: Dict<number>;
-	userHostedGameStats?: Dict<IUserHostedGameStats[]>;
+	userHostedGameStats?: Dict<IGameStat[]>;
 	userHostedGameQueue?: IQueuedUserHostedGame[];
 	userHostStatuses?: Dict<UserHostStatus>;
 }
@@ -118,10 +141,11 @@ interface IOfflineMessage {
 	readTime: number;
 	sender: string;
 	sentTime: number;
-	expired?: boolean;
+	discarded?: boolean;
 }
 
 export interface IGlobalDatabase {
 	lastSeen?: Dict<number>;
-	offlineMessages?: Dict<IOfflineMessage[]>;
+	loginSessionCookie?: string;
+	offlineMessages?: Dict<{messages: IOfflineMessage[], timezone?: TimeZone}>;
 }

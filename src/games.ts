@@ -1,5 +1,7 @@
 import fs = require('fs');
 import path = require('path');
+import type { IPokemonPick } from './html-pages/components/pokemon-picker-base';
+import type { ITrainerPick } from './html-pages/components/trainer-picker';
 
 import type { PRNGSeed } from './lib/prng';
 import { ScriptedGame } from './room-game-scripted';
@@ -7,45 +9,48 @@ import type { UserHostedGame } from './room-game-user-hosted';
 import type { Room } from "./rooms";
 import type { CommandErrorArray } from "./types/command-parser";
 import type {
-	AutoCreateTimerType, DefaultGameOption, GameCategory, GameCommandDefinitions, GameCommandReturnType, GameMode, IGameAchievement,
-	IGameFile, IGameFormat, IGameFormatComputed, IGameMode, IGameModeFile, IGameOptionValues, IGamesWorkers, IGameTemplateFile,
-	IGameVariant, IInternalGames, InternalGameKey, IUserHostedComputed, IUserHostedFormat, IUserHostedFormatComputed, LoadedGameCommands,
-	LoadedGameFile, UserHostedCustomizable
+	AutoCreateTimerType, DefaultGameOption, DisallowedChallenges, GameCategory, GameChallenge, GameCommandDefinitions,
+	GameCommandReturnType, GameMode, IBotChallengeOptions, IGameAchievement, IGameFile, IGameFormat, IGameFormatComputed, IGameMode,
+	IGameModeFile, IGameOptionValues, IGamesWorkers, IGameTemplateFile, IGameVariant, InternalGame, IUserHostedComputed, IUserHostedFormat,
+	IUserHostedFormatComputed, LoadedGameCommands, LoadedGameFile, UserHostedCustomizable
 } from './types/games';
 import type { IAbility, IAbilityCopy, IItem, IItemCopy, IMove, IMoveCopy, IPokemon, IPokemonCopy } from './types/pokemon-showdown';
 import type { IGameHostBox, IGameScriptedBox, IPastGame } from './types/storage';
+import type { HexCode } from './types/tools';
 import type { User } from './users';
 import { ParametersWorker } from './workers/parameters';
 import { PortmanteausWorker } from './workers/portmanteaus';
 
 const DEFAULT_CATEGORY_COOLDOWN = 3;
-const IMMUNE_MATCHUP_SCORE = 0.001;
+const MAX_MOVE_AVAILABILITY = 500;
+const MINIGAME_BITS = 25;
+const SCRIPTED_GAME_HIGHLIGHT = "Hosting a scriptedgame of";
+const USER_HOST_GAME_HIGHLIGHT = "is hosting a hostgame of";
+const SCRIPTED_GAME_VOTING_HIGHLIGHT = "Hosting a scriptedgamevote";
 
 const gamesDirectory = path.join(__dirname, 'games');
-const internalGamePaths: IInternalGames = {
+const internalGamePaths: Readonly<KeyedDict<InternalGame, string>> = {
+	botchallenge: path.join(gamesDirectory, "internal", "bot-challenge.js"),
 	eggtoss: path.join(gamesDirectory, "internal", "egg-toss.js"),
 	headtohead: path.join(gamesDirectory, "internal", "head-to-head.js"),
 	onevsone: path.join(gamesDirectory, "internal", "one-vs-one.js"),
 	vote: path.join(gamesDirectory, "internal", "vote.js"),
 };
 
-const categoryNames: KeyedDict<GameCategory, string> = {
-	'board': 'Board',
-	'board-property': 'Board (property)',
-	'card': 'Card',
-	'card-high-low': 'Card (high-low)',
-	'card-matching': 'Card (matching)',
+const categoryNames: Readonly<KeyedDict<GameCategory, string>> = {
 	'chain': 'Chain',
-	'elimination-tournament': 'Elimination tournament',
-	'identification': 'Identification',
-	'knowledge': 'Knowledge',
+	'elimination-tournament': 'Elimination Tournament',
+	'identification-1': 'Identification Group 1',
+	'identification-2': 'Identification Group 2',
+	'knowledge-1': 'Knowledge Group 1',
+	'knowledge-2': 'Knowledge Group 2',
+	'knowledge-3': 'Knowledge Group 3',
 	'luck': 'Luck',
 	'map': 'Map',
 	'puzzle': 'Puzzle',
 	'reaction': 'Reaction',
 	'speed': 'Speed',
-	'strategy': 'Strategy',
-	'visual': 'Visual',
+	'tabletop': 'Tabletop',
 };
 
 const sharedCommandDefinitions: GameCommandDefinitions = {
@@ -78,50 +83,53 @@ const sharedCommandDefinitions: GameCommandDefinitions = {
 	},
 };
 
-export class Games {
-	// exported constants
-	readonly gamesDirectory: typeof gamesDirectory = gamesDirectory;
-	readonly scriptedGameHighlight: string = "Hosting a scriptedgame of";
-	readonly userHostedGameHighlight: string = "is hosting a hostgame of";
-	readonly scriptedGameVoteHighlight: string = "Hosting a scriptedgamevote";
+type Achievements = Dict<IGameAchievement>;
+type Formats = Dict<LoadedGameFile>;
+type InternalFormats = KeyedDict<InternalGame, LoadedGameFile>;
+type LastChallengeTimes = KeyedDict<GameChallenge, Dict<Dict<number>>>;
+type MinigameCommandNames = Dict<{aliases: string[]; format: string}>;
+type Modes = Dict<IGameMode>;
+type UserHostedFormats = Dict<IUserHostedComputed>;
 
-	readonly achievements: Dict<IGameAchievement> = {};
-	readonly aliases: Dict<string> = {};
-	autoCreateTimers: Dict<NodeJS.Timer> = {};
-	autoCreateTimerData: Dict<{endTime: number, type: AutoCreateTimerType}> = {};
-	readonly formats: Dict<LoadedGameFile> = {};
-	readonly freejoinFormatTargets: string[] = [];
-	gameCooldownMessageTimers: Dict<NodeJS.Timer> = {};
-	gameCooldownMessageTimerData: Dict<{endTime: number, minigameCooldownMinutes: number}> = {};
+export class Games {
+	private readonly achievements: Achievements = {};
+	private readonly aliases: Dict<string> = {};
+	private autoCreateTimers: Dict<NodeJS.Timer> = {};
+	private autoCreateTimerData: Dict<{endTime: number, type: AutoCreateTimerType}> = {};
+	private readonly formats: Formats = {};
+	private readonly freejoinFormatTargets: string[] = [];
+	private gameCooldownMessageTimers: Dict<NodeJS.Timer> = {};
+	private gameCooldownMessageTimerData: Dict<{endTime: number, minigameCooldownMinutes: number}> = {};
 	// @ts-expect-error - set in loadFormats()
-	readonly internalFormats: KeyedDict<InternalGameKey, LoadedGameFile> = {};
-	lastCatalogUpdates: Dict<string> = {};
-	lastGames: Dict<number> = {};
-	lastMinigames: Dict<number> = {};
-	lastOneVsOneChallengeTimes: Dict<Dict<number>> = {};
-	lastScriptedGames: Dict<number> = {};
-	lastUserHostedGames: Dict<number> = {};
-	lastUserHostTimes: Dict<Dict<number>> = {};
-	lastUserHostFormatTimes: Dict<Dict<number>> = {};
-	readonly maxMoveAvailability: number = 500;
-	readonly minigameBits: number = 25;
-	readonly minigameCommandNames: Dict<{aliases: string[]; format: string}> = {};
-	readonly modes: Dict<IGameMode> = {};
-	readonly modeAliases: Dict<string> = {};
-	nextVoteBans: Dict<string[]> = {};
-	reloadInProgress: boolean = false;
-	readonly userHostedAliases: Dict<string> = {};
-	readonly userHostedFormats: Dict<IUserHostedComputed> = {};
-	readonly workers: IGamesWorkers = {
+	private readonly internalFormats: InternalFormats = {};
+	private lastCatalogUpdates: Dict<string> = {};
+	private lastChallengeTimes: LastChallengeTimes = {
+		botchallenge: {},
+		onevsone: {},
+	};
+	private lastGames: Dict<number> = {};
+	private lastMinigames: Dict<number> = {};
+	private lastScriptedGames: Dict<number> = {};
+	private lastUserHostedGames: Dict<number> = {};
+	private lastUserHostTimes: Dict<Dict<number>> = {};
+	private lastUserHostFormatTimes: Dict<Dict<number>> = {};
+	private readonly minigameCommandNames: MinigameCommandNames = {};
+	private readonly modes: Modes = {};
+	private readonly modeAliases: Dict<string> = {};
+	private nextVoteBans: Dict<string[]> = {};
+	private reloadInProgress: boolean = false;
+	private readonly userHostedAliases: Dict<string> = {};
+	private readonly userHostedFormats: UserHostedFormats = {};
+	private readonly workers: IGamesWorkers = {
 		parameters: new ParametersWorker(),
 		portmanteaus: new PortmanteausWorker(),
 	};
 
-	readonly commands: LoadedGameCommands;
-	readonly sharedCommands: LoadedGameCommands;
+	private readonly commands: LoadedGameCommands;
+	private readonly sharedCommands: LoadedGameCommands;
 
 	// set in loadFormats()
-	readonly userHosted!: typeof import('./room-game-user-hosted').game;
+	private readonly userHosted!: typeof import('./room-game-user-hosted').game;
 
 	/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 	private abilitiesLists: Dict<readonly IAbility[]> = Object.create(null);
@@ -136,68 +144,84 @@ export class Games {
 		this.commands = Object.assign(Object.create(null), sharedCommands) as GameCommandDefinitions;
 	}
 
-	onReload(previous: Partial<Games>): void {
-		if (previous.autoCreateTimers) {
-			for (const i in previous.autoCreateTimers) {
-				clearTimeout(previous.autoCreateTimers[i]);
-				delete previous.autoCreateTimers[i];
-			}
+	getScriptedGameHighlight(): string {
+		return SCRIPTED_GAME_HIGHLIGHT;
+	}
 
-			for (const i in previous.autoCreateTimerData) {
-				const room = Rooms.get(i);
-				if (room) {
-					const data = previous.autoCreateTimerData[i];
-					let timer = data.endTime - Date.now();
-					if (timer < 5000) timer = 5000;
-					this.setAutoCreateTimer(room, data.type, timer);
-				}
-			}
-		}
+	getUserHostedGameHighlight(): string {
+		return USER_HOST_GAME_HIGHLIGHT;
+	}
 
-		if (previous.gameCooldownMessageTimers) {
-			for (const i in previous.gameCooldownMessageTimers) {
-				clearTimeout(previous.gameCooldownMessageTimers[i]);
-				delete previous.gameCooldownMessageTimers[i];
-			}
+	getScriptedGameVoteHighlight(): string {
+		return SCRIPTED_GAME_VOTING_HIGHLIGHT;
+	}
 
-			for (const i in previous.gameCooldownMessageTimerData) {
-				const room = Rooms.get(i);
-				if (room) {
-					const data = previous.gameCooldownMessageTimerData[i];
-					let timer = data.endTime - Date.now();
-					if (timer < 5000) timer = 5000;
-					this.setGameCooldownMessageTimer(room, data.minigameCooldownMinutes, timer);
-				}
-			}
-		}
+	getAchievements(): Readonly<Achievements> {
+		return this.achievements;
+	}
 
-		if (previous.lastCatalogUpdates) Object.assign(this.lastCatalogUpdates, previous.lastCatalogUpdates);
-		if (previous.lastGames) Object.assign(this.lastGames, previous.lastGames);
-		if (previous.lastMinigames) Object.assign(this.lastMinigames, previous.lastMinigames);
-		if (previous.lastOneVsOneChallengeTimes) Object.assign(this.lastOneVsOneChallengeTimes, previous.lastOneVsOneChallengeTimes);
-		if (previous.lastScriptedGames) Object.assign(this.lastScriptedGames, previous.lastScriptedGames);
-		if (previous.lastUserHostedGames) Object.assign(this.lastUserHostedGames, previous.lastUserHostedGames);
-		if (previous.lastUserHostTimes) Object.assign(this.lastUserHostTimes, previous.lastUserHostTimes);
-		if (previous.lastUserHostFormatTimes) Object.assign(this.lastUserHostFormatTimes, previous.lastUserHostFormatTimes);
+	getAliases(): Readonly<Dict<string>> {
+		return this.aliases;
+	}
 
-		if (previous.nextVoteBans) {
-			for (const i in previous.nextVoteBans) {
-				this.nextVoteBans[i] = previous.nextVoteBans[i].slice();
-			}
-		}
+	getFormats(): Readonly<Formats> {
+		return this.formats;
+	}
 
-		for (const i in previous) {
-			// @ts-expect-error
-			delete previous[i];
-		}
+	getFreejoinFormatTargets(): readonly string[] {
+		return this.freejoinFormatTargets;
+	}
 
-		this.loadFormats();
-		if (Config.gameCatalogGists) {
-			for (const i in Config.gameCatalogGists) {
-				const room = Rooms.get(i);
-				if (room) this.updateGameCatalog(room);
-			}
-		}
+	getInternalFormats(): Readonly<InternalFormats> {
+		return this.internalFormats;
+	}
+
+	getMaxMoveAvailability(): number {
+		return MAX_MOVE_AVAILABILITY;
+	}
+
+	getMinigameBits(): number {
+		return MINIGAME_BITS;
+	}
+
+	getSharedCommands(): Readonly<LoadedGameCommands> {
+		return this.sharedCommands;
+	}
+
+	getLastChallengeTimes(): DeepImmutable<LastChallengeTimes> {
+		return this.lastChallengeTimes;
+	}
+
+	getMinigameCommandNames(): Readonly<MinigameCommandNames> {
+		return this.minigameCommandNames;
+	}
+
+	getModes(): Readonly<Modes> {
+		return this.modes;
+	}
+
+	getModeAliases(): Readonly<Dict<string>> {
+		return this.modeAliases;
+	}
+
+	getUserHostedAliases(): Readonly<Dict<string>> {
+		return this.userHostedAliases;
+	}
+
+	getUserHostedFormats(): Readonly<UserHostedFormats> {
+		return this.userHostedFormats;
+	}
+
+	getWorkers(): Readonly<IGamesWorkers> {
+		return this.workers;
+	}
+
+	isReloadInProgress(): boolean {
+		return this.reloadInProgress;
+	}
+
+	setReloadInProgress(state: boolean): void {
+		this.reloadInProgress = state;
 	}
 
 	unrefWorkers(): void {
@@ -213,35 +237,12 @@ export class Games {
 		return Object.assign(Tools.deepClone(template), game);
 	}
 
-	loadFileAchievements(file: DeepImmutable<IGameFile>): void {
-		if (!file.class.achievements) return;
-		for (const key in file.class.achievements) {
-			const achievement = file.class.achievements[key]!;
-			if (Tools.toId(achievement.name) !== key) {
-				throw new Error(file.name + "'s achievement " + achievement.name + " needs to have the key '" +
-					Tools.toId(achievement.name) + "'");
-			}
-			if (key in this.achievements) {
-				if (this.achievements[key].name !== achievement.name) {
-					throw new Error(file.name + "'s achievement '" + key + "' has the name '" + this.achievements[key].name +
-						"' in another game.");
-				}
-				if (this.achievements[key].description !== achievement.description) {
-					throw new Error(file.name + "'s achievement '" + key + "' has the description '" + this.achievements[key].description +
-						"' in another game.");
-				}
-				continue;
-			}
-			this.achievements[key] = achievement;
-		}
-	}
-
 	loadFormats(): void {
 		// @ts-expect-error
 		this.userHosted = (require(path.join(Tools.builtFolder, "room-game-user-hosted.js")) as // eslint-disable-line @typescript-eslint/no-var-requires
 			typeof import('./room-game-user-hosted')).game;
 
-		const internalGameKeys = Object.keys(internalGamePaths) as (keyof IInternalGames)[];
+		const internalGameKeys = Object.keys(internalGamePaths) as InternalGame[];
 		for (const key of internalGameKeys) {
 			// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-var-requires
 			const file = require(internalGamePaths[key]).game as DeepImmutable<IGameFile> | undefined;
@@ -309,6 +310,13 @@ export class Games {
 			const id = Tools.toId(file.name);
 			if (id in this.formats) throw new Error("The name '" + file.name + "' is already used by another game.");
 
+			let botChallenge: IBotChallengeOptions | undefined;
+			if (file.botChallenge) {
+				botChallenge = Tools.deepClone(file.botChallenge);
+				if (botChallenge.options) botChallenge.options = botChallenge.options.map(x => Tools.toId(x));
+				if (botChallenge.requiredOptions) botChallenge.requiredOptions = botChallenge.requiredOptions.map(x => Tools.toId(x));
+			}
+
 			let commands;
 			if (file.commands) {
 				commands = CommandParser.loadCommandDefinitions<ScriptedGame, GameCommandReturnType>(Tools.deepClone(file.commands));
@@ -334,7 +342,7 @@ export class Games {
 
 			if (file.class.achievements) this.loadFileAchievements(file);
 
-			this.formats[id] = Object.assign({}, file, {commands, id, modes, variants});
+			this.formats[id] = Object.assign({}, file, {botChallenge, commands, id, modes, variants});
 		}
 
 		for (const format of this.userHosted.formats) {
@@ -555,7 +563,8 @@ export class Games {
 					}
 					const format = global.Games.getFormat(formatName + (target ? "," + target : ""), true);
 					if (Array.isArray(format)) return this.sayError(format);
-					if (global.Games.reloadInProgress) return this.sayError(['reloadInProgress']);
+					if (global.Games.isReloadInProgress()) return this.sayError(['reloadInProgress']);
+					if (format.mode) return this.say("Minigames cannot be played in modes.");
 					delete format.inputOptions.points;
 					const game = global.Games.createGame(room, format, pmRoom, true);
 					game.signups();
@@ -673,17 +682,19 @@ export class Games {
 			variant,
 		};
 
+		const botChallenge: IBotChallengeOptions = formatData.botChallenge || {enabled: false};
 		let customizableOptions: Dict<IGameOptionValues> = formatData.customizableOptions || {};
 		let defaultOptions: DefaultGameOption[] = formatData.defaultOptions || [];
-		let noOneVsOne: boolean = formatData.noOneVsOne || false;
+		const disallowedChallenges: DisallowedChallenges = formatData.disallowedChallenges || {};
 		if (variant) {
+			if (variant.botChallenge) Object.assign(botChallenge, variant.botChallenge);
 			if (variant.customizableOptions) customizableOptions = variant.customizableOptions;
 			if (variant.defaultOptions) defaultOptions = variant.defaultOptions;
-			if (noOneVsOne && variant.noOneVsOne === false) noOneVsOne = false;
+			if (variant.disallowedChallenges) Object.assign(disallowedChallenges, variant.disallowedChallenges);
 		}
 
 		const format = Object.assign(formatData, formatComputed,
-			{customizableOptions, defaultOptions, noOneVsOne, options: {}}) as IGameFormat;
+			{botChallenge, customizableOptions, defaultOptions, disallowedChallenges, options: {}}) as IGameFormat;
 		format.options = ScriptedGame.setOptions(format, mode, variant);
 
 		return format;
@@ -805,7 +816,7 @@ export class Games {
 		return format;
 	}
 
-	getInternalFormat(id: InternalGameKey): IGameFormat | CommandErrorArray {
+	getInternalFormat(id: InternalGame): IGameFormat | CommandErrorArray {
 		if (this.internalFormats[id].disabled) return ['disabledGameFormat', this.internalFormats[id].name];
 
 		const formatData = Tools.deepClone(this.internalFormats[id]);
@@ -823,10 +834,45 @@ export class Games {
 		return format;
 	}
 
-	getExistingInternalFormat(id: InternalGameKey): IGameFormat {
+	getExistingInternalFormat(id: InternalGame): IGameFormat {
 		const format = this.getInternalFormat(id);
 		if (Array.isArray(format)) throw new Error(format.join(": "));
 		return format;
+	}
+
+	setLastGame(room: Room, time: number): void {
+		this.lastGames[room.id] = time;
+	}
+
+	setLastMinigame(room: Room, time: number): void {
+		this.lastMinigames[room.id] = time;
+	}
+
+	setLastScriptedGame(room: Room, time: number): void {
+		this.lastScriptedGames[room.id] = time;
+	}
+
+	setLastUserHostedGame(room: Room, time: number): void {
+		this.lastUserHostedGames[room.id] = time;
+	}
+
+	setLastUserHostTime(room: Room, hostId: string, time: number): void {
+		if (!(room.id in this.lastUserHostTimes)) this.lastUserHostTimes[room.id] = {};
+		this.lastUserHostTimes[room.id][hostId] = time;
+	}
+
+	removeLastUserHostTime(room: Room, hostId: string): void {
+		if (room.id in this.lastUserHostTimes) delete this.lastUserHostTimes[room.id][hostId];
+	}
+
+	setLastUserHostFormatTime(room: Room, formatId: string, time: number): void {
+		if (!(room.id in this.lastUserHostFormatTimes)) this.lastUserHostFormatTimes[room.id] = {};
+		this.lastUserHostFormatTimes[room.id][formatId] = time;
+	}
+
+	setLastChallengeTime(challenge: GameChallenge, room: Room, userid: string, time: number): void {
+		if (!(room.id in this.lastChallengeTimes[challenge])) this.lastChallengeTimes[challenge][room.id] = {};
+		this.lastChallengeTimes[challenge][room.id][userid] = time;
 	}
 
 	getRemainingGameCooldown(room: Room, isMinigame?: boolean): number {
@@ -848,6 +894,26 @@ export class Games {
 		const now = Date.now();
 		if (Config.tournamentGameCooldownTimers && room.id in Config.tournamentGameCooldownTimers && room.id in this.lastGames) {
 			return (Config.tournamentGameCooldownTimers[room.id] * 60 * 1000) - (now - this.lastGames[room.id]);
+		}
+
+		return 0;
+	}
+
+	getRemainingUserHostCooldown(room: Room, hostId: string): number {
+		const now = Date.now();
+		if (Config.userHostCooldownTimers && room.id in Config.userHostCooldownTimers && room.id in this.lastUserHostTimes &&
+			hostId in this.lastUserHostTimes[room.id]) {
+			return (Config.userHostCooldownTimers[room.id] * 60 * 1000) - (now - this.lastUserHostTimes[room.id][hostId]);
+		}
+
+		return 0;
+	}
+
+	getRemainingUserHostFormatCooldown(room: Room, formatId: string): number {
+		const now = Date.now();
+		if (Config.userHostFormatCooldownTimers && room.id in Config.userHostFormatCooldownTimers &&
+			room.id in this.lastUserHostFormatTimes && formatId in this.lastUserHostFormatTimes[room.id]) {
+			return (Config.userHostFormatCooldownTimers[room.id] * 60 * 1000) - (now - this.lastUserHostFormatTimes[room.id][formatId]);
 		}
 
 		return 0;
@@ -987,12 +1053,12 @@ export class Games {
 		return childGame;
 	}
 
-	createUserHostedGame(room: Room, format: IUserHostedFormat, host: User | string): UserHostedGame {
+	createUserHostedGame(room: Room, format: IUserHostedFormat, host: User | string, noControlPanel?: boolean): UserHostedGame {
 		this.clearAutoCreateTimer(room);
 
 		room.userHostedGame = new format.class(room);
 		room.userHostedGame.initialize(format);
-		room.userHostedGame.setHost(host);
+		room.userHostedGame.setHost(host, noControlPanel);
 
 		if (!(room.id in this.lastUserHostTimes)) this.lastUserHostTimes[room.id] = {};
 		if (typeof host === 'string') {
@@ -1009,6 +1075,23 @@ export class Games {
 			// @ts-expect-error
 			this.formats[format.id].disabled = true;
 		}
+	}
+
+	enableFormat(format: IGameFormat): void {
+		if (format.id in this.formats) {
+			// @ts-expect-error
+			this.formats[format.id].disabled = false;
+		}
+	}
+
+	disableInternalFormat(key: InternalGame): void {
+		// @ts-expect-error
+		this.internalFormats[key].disabled = true;
+	}
+
+	enableInternalFormat(key: InternalGame): void {
+		// @ts-expect-error
+		this.internalFormats[key].disabled = false;
 	}
 
 	banFromNextVote(room: Room, format: IGameFormat): void {
@@ -1036,7 +1119,7 @@ export class Games {
 
 		this.autoCreateTimerData[room.id] = {endTime: Date.now() + timer, type};
 		this.autoCreateTimers[room.id] = setTimeout(() => {
-			if (global.Games.reloadInProgress || (room.game && room.game.isMiniGame)) {
+			if (global.Games.isReloadInProgress() || (room.game && room.game.isMiniGame)) {
 				this.setAutoCreateTimer(room, type, 5 * 1000);
 				return;
 			}
@@ -1052,11 +1135,6 @@ export class Games {
 				CommandParser.parse(room, Users.self, Config.commandCharacter + "nexthost", now);
 			}
 		}, timer);
-	}
-
-	clearAutoCreateTimer(room: Room): void {
-		if (room.id in this.autoCreateTimers) clearTimeout(this.autoCreateTimers[room.id]);
-		delete this.autoCreateTimerData[room.id];
 	}
 
 	setGameCooldownMessageTimer(room: Room, minigameCooldownMinutes: number, timer?: number): void {
@@ -1076,7 +1154,7 @@ export class Games {
 	 * filterAbility: Return `false` to filter `ability` out of the list
 	 */
 	getAbilitiesList(filter?: (ability: IAbility) => boolean, gen?: number): readonly IAbility[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const mod = 'gen' + gen;
 		if (!Object.prototype.hasOwnProperty.call(this.abilitiesLists, mod)) {
 			const baseList = Dex.getDex(mod).getAbilitiesList();
@@ -1104,7 +1182,7 @@ export class Games {
 	 * filterAbility: Return `false` to filter `ability` out of the list
 	 */
 	getAbilitiesCopyList(filter?: (ability: IAbility) => boolean, gen?: number): IAbilityCopy[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const dex = Dex.getDex('gen' + gen);
 		return this.getAbilitiesList(filter, gen).map(x => dex.getAbilityCopy(x));
 	}
@@ -1114,7 +1192,7 @@ export class Games {
 	 * filterItem: Return `false` to filter `item` out of the list
 	 */
 	getItemsList(filter?: (item: IItem) => boolean, gen?: number): readonly IItem[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const mod = 'gen' + gen;
 		if (!Object.prototype.hasOwnProperty.call(this.itemsLists, mod)) {
 			const baseList = Dex.getDex(mod).getItemsList();
@@ -1142,7 +1220,7 @@ export class Games {
 	 * filterItem: Return `false` to filter `item` out of the list
 	 */
 	getItemsCopyList(filter?: (item: IItem) => boolean, gen?: number): IItemCopy[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const dex = Dex.getDex('gen' + gen);
 		return this.getItemsList(filter, gen).map(x => dex.getItemCopy(x));
 	}
@@ -1152,7 +1230,7 @@ export class Games {
 	 * filterItem: Return `false` to filter `move` out of the list
 	 */
 	getMovesList(filter?: (move: IMove) => boolean, gen?: number): readonly IMove[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const mod = 'gen' + gen;
 		if (!Object.prototype.hasOwnProperty.call(this.movesLists, mod)) {
 			const baseList = Dex.getDex(mod).getMovesList();
@@ -1180,7 +1258,7 @@ export class Games {
 	 * filterItem: Return `false` to filter `move` out of the list
 	 */
 	getMovesCopyList(filter?: (move: IMove) => boolean, gen?: number): IMoveCopy[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const dex = Dex.getDex('gen' + gen);
 		return this.getMovesList(filter, gen).map(x => dex.getMoveCopy(x));
 	}
@@ -1190,7 +1268,7 @@ export class Games {
 	 * filterItem: Return `false` to filter `pokemon` out of the list
 	 */
 	getPokemonList(filter?: (pokemon: IPokemon) => boolean, gen?: number): readonly IPokemon[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const mod = 'gen' + gen;
 		if (!Object.prototype.hasOwnProperty.call(this.pokemonLists, mod)) {
 			const baseList = Dex.getDex(mod).getPokemonList();
@@ -1218,48 +1296,47 @@ export class Games {
 	 * filterItem: Return `false` to filter `pokemon` out of the list
 	 */
 	getPokemonCopyList(filter?: (pokemon: IPokemon) => boolean, gen?: number): IPokemonCopy[] {
-		if (!gen) gen = Dex.gen;
+		if (!gen) gen = Dex.getGen();
 		const dex = Dex.getDex('gen' + gen);
 		return this.getPokemonList(filter, gen).map(x => dex.getPokemonCopy(x));
 	}
 
-	getEffectivenessScore(source: string | IMove, target: string | readonly string[] | IPokemon): number {
+	getEffectivenessScore(source: string | IMove, target: string | readonly string[] | IPokemon, inverseTypes?: boolean): number {
 		if (Dex.isImmune(source, target)) {
-			return IMMUNE_MATCHUP_SCORE;
+			if (inverseTypes) return 2;
+			return 0.125;
 		}
 
 		const effectiveness = Dex.getEffectiveness(source, target);
 		if (effectiveness === -2) {
+			if (inverseTypes) return 4;
 			return 0.25;
 		} else if (effectiveness === -1) {
+			if (inverseTypes) return 2;
 			return 0.5;
 		} else if (effectiveness === 1) {
+			if (inverseTypes) return 0.5;
 			return 2;
 		} else if (effectiveness === 2) {
+			if (inverseTypes) return 0.25;
 			return 4;
 		}
 
 		return 1;
 	}
 
-	getCombinedEffectivenessScore(attacker: IPokemon, defender: string | readonly string[] | IPokemon): number {
+	getCombinedEffectivenessScore(attacker: IPokemon, defender: string | readonly string[] | IPokemon, inverseTypes?: boolean): number {
 		let combinedScore = 1;
 		for (const type of attacker.types) {
-			const score = this.getEffectivenessScore(type, defender);
-			if (score === IMMUNE_MATCHUP_SCORE) {
-				combinedScore = IMMUNE_MATCHUP_SCORE;
-				break;
-			}
-
-			combinedScore *= score;
+			combinedScore *= this.getEffectivenessScore(type, defender, inverseTypes);
 		}
 
 		return combinedScore;
 	}
 
-	getMatchupWinner(attacker: IPokemon, defender: IPokemon): IPokemon | null {
-		const matchupScore = this.getCombinedEffectivenessScore(attacker, defender) /
-			this.getCombinedEffectivenessScore(defender, attacker);
+	getMatchupWinner(attacker: IPokemon, defender: IPokemon, inverseTypes?: boolean): IPokemon | null {
+		const matchupScore = this.getCombinedEffectivenessScore(attacker, defender, inverseTypes) /
+			this.getCombinedEffectivenessScore(defender, attacker, inverseTypes);
 
 		if (matchupScore > 1) {
 			return attacker;
@@ -1282,8 +1359,6 @@ export class Games {
 		if (!database.gameTrainerCards || !(id in database.gameTrainerCards)) return "";
 
 		const trainerCard = database.gameTrainerCards[id];
-		const avatarSpriteId = Dex.getTrainerSpriteId(trainerCard.avatar);
-		if (!avatarSpriteId) return "";
 
 		let html = '<span class="infobox" style="display: inline-block;width:250px"><center><b><username>' + name + '</username></b>';
 		if (format) {
@@ -1293,18 +1368,24 @@ export class Games {
 			}
 		}
 		html += "<hr /><span style='display: block;height:115px";
-		if (trainerCard.background) {
-			html += ";background: " + Tools.hexCodes[trainerCard.background].gradient;
+		if (trainerCard.background && trainerCard.background in Tools.hexCodes) {
+			html += ";background: " + Tools.hexCodes[trainerCard.background]!.gradient;
 		}
 		html += "'>";
 
+		let avatarHtml = "";
+		if (trainerCard.avatar) {
+			const avatarSpriteId = Dex.getTrainerSpriteId(trainerCard.avatar);
+			if (avatarSpriteId) avatarHtml = Dex.getTrainerSprite(avatarSpriteId);
+		}
+
 		const emptySpan = '<span style="display: inline-block ; height: 30px ; width: 40px"></span>';
-		const avatarHtml = Dex.getTrainerSprite(avatarSpriteId);
 		if (trainerCard.pokemon.length) {
+			if (!avatarHtml) avatarHtml = "&nbsp;";
 			if (trainerCard.pokemonGifs) {
-				html += Dex.getPokemonGif(Dex.getExistingPokemon(trainerCard.pokemon[0]));
+				html += Dex.getPokemonModel(Dex.getExistingPokemon(trainerCard.pokemon[0]));
 				html += avatarHtml;
-				if (trainerCard.pokemon[1]) html += Dex.getPokemonGif(Dex.getExistingPokemon(trainerCard.pokemon[1]));
+				if (trainerCard.pokemon[1]) html += Dex.getPokemonModel(Dex.getExistingPokemon(trainerCard.pokemon[1]));
 			} else {
 				if (trainerCard.pokemon.length <= 2) {
 					html += Dex.getPokemonIcon(Dex.getExistingPokemon(trainerCard.pokemon[0]));
@@ -1323,6 +1404,7 @@ export class Games {
 				}
 			}
 		} else {
+			if (!avatarHtml) return "";
 			html += avatarHtml;
 		}
 
@@ -1363,14 +1445,14 @@ export class Games {
 
 		let html = "<center>";
 		html += "<span";
-		if (scriptedBox && scriptedBox.background) {
+		if (scriptedBox && scriptedBox.background && scriptedBox.background in Tools.hexCodes) {
 			html += " style='display: block;";
-			if (Tools.hexCodes[scriptedBox.background].textColor) {
-				html += 'color: ' + Tools.hexCodes[scriptedBox.background].textColor + ';';
+			if (Tools.hexCodes[scriptedBox.background]!.textColor) {
+				html += 'color: ' + Tools.hexCodes[scriptedBox.background]!.textColor + ';';
 			} else {
 				html += 'color: #000000;';
 			}
-			html += "background: " + Tools.hexCodes[scriptedBox.background].gradient + "'";
+			html += "background: " + Tools.hexCodes[scriptedBox.background]!.gradient + "'";
 		}
 		html += ">";
 
@@ -1385,20 +1467,20 @@ export class Games {
 		}
 
 		if (mascot) {
-			const gif = Dex.getPokemonGif(mascot, undefined, undefined, shinyMascot);
+			const gif = Dex.getPokemonModel(mascot, undefined, undefined, shinyMascot);
 			if (gif) html += gif;
 		}
 		html += "<h3>" + gameName + "</h3>";
 		if (description) html += description;
 
 		let buttonStyle = '';
-		if (scriptedBox && scriptedBox.buttons) {
-			if (Tools.hexCodes[scriptedBox.buttons].textColor) {
-				buttonStyle += 'color: ' + Tools.hexCodes[scriptedBox.buttons].textColor + ';';
+		if (scriptedBox && scriptedBox.buttons && scriptedBox.buttons in Tools.hexCodes) {
+			if (Tools.hexCodes[scriptedBox.buttons]!.textColor) {
+				buttonStyle += 'color: ' + Tools.hexCodes[scriptedBox.buttons]!.textColor + ';';
 			} else {
 				buttonStyle += 'color: #000000;';
 			}
-			buttonStyle += "background: " + Tools.hexCodes[scriptedBox.buttons].color;
+			buttonStyle += "background: " + Tools.hexCodes[scriptedBox.buttons]!.color;
 		}
 
 		html += '<br /><br /><button class="button"' + (buttonStyle ? ' style="' + buttonStyle + '"' : '');
@@ -1429,25 +1511,42 @@ export class Games {
 
 		let html = "<center>";
 		html += "<span";
-		if (hostBox && hostBox.background) {
+		if (hostBox && hostBox.background && hostBox.background in Tools.hexCodes) {
 			html += " style='display: block;";
-			if (Tools.hexCodes[hostBox.background].textColor) {
-				html += 'color: ' + Tools.hexCodes[hostBox.background].textColor + ';';
+			if (Tools.hexCodes[hostBox.background]!.textColor) {
+				html += 'color: ' + Tools.hexCodes[hostBox.background]!.textColor + ';';
 			} else {
 				html += 'color: #000000;';
 			}
-			html += "background: " + Tools.hexCodes[hostBox.background].gradient + "'";
+			html += "background: " + Tools.hexCodes[hostBox.background]!.gradient + "'";
 		}
 		html += ">";
 
-		if (hostBox && hostBox.pokemon.length) {
-			const gifs: string[] = [];
-			for (let i = 0; i < hostBox.pokemon.length; i++) {
-				const gif = Dex.getPokemonGif(Dex.getExistingPokemon(hostBox.pokemon[i]), undefined, undefined, hostBox.shinyPokemon[i]);
-				if (gif) gifs.push(gif);
+		if (hostBox) {
+			let trainerHtml = "";
+			if (hostBox.avatar) {
+				const trainerSpriteId = Dex.getTrainerSpriteId(hostBox.avatar);
+				if (trainerSpriteId) {
+					trainerHtml += Dex.getTrainerSprite(trainerSpriteId);
+				}
 			}
 
-			html += gifs.join("&nbsp;");
+			let staticSprites = false;
+			const gifs: string[] = [];
+			for (const pokemon of hostBox.pokemon) {
+				const gif = Dex.getPokemonModel(Dex.getExistingPokemon(pokemon.pokemon), pokemon.generation, undefined, pokemon.shiny);
+				if (gif) {
+					if (!staticSprites && pokemon.generation !== 'xy' && pokemon.generation !== 'bw') staticSprites = true;
+					gifs.push(gif);
+				}
+			}
+
+			if (trainerHtml) {
+				html += trainerHtml;
+				if (gifs.length) html += "<br />";
+			}
+
+			html += gifs.join(staticSprites ? "" : "&nbsp;&nbsp;&nbsp;");
 		}
 
 		html += "<h3>" + gameName + "</h3>";
@@ -1458,13 +1557,13 @@ export class Games {
 		}
 
 		let buttonStyle = '';
-		if (hostBox && hostBox.buttons) {
-			if (Tools.hexCodes[hostBox.buttons].textColor) {
-				buttonStyle += 'color: ' + Tools.hexCodes[hostBox.buttons].textColor + ';';
+		if (hostBox && hostBox.buttons && hostBox.buttons in Tools.hexCodes) {
+			if (Tools.hexCodes[hostBox.buttons]!.textColor) {
+				buttonStyle += 'color: ' + Tools.hexCodes[hostBox.buttons]!.textColor + ';';
 			} else {
 				buttonStyle += 'color: #000000;';
 			}
-			buttonStyle += "background: " + Tools.hexCodes[hostBox.buttons].color;
+			buttonStyle += "background: " + Tools.hexCodes[hostBox.buttons]!.color;
 		}
 
 		html += '<br /><br /><button class="button"' + (buttonStyle ? ' style="' + buttonStyle + '"' : '');
@@ -1477,6 +1576,112 @@ export class Games {
 		html += "<br />&nbsp;</span></center>";
 
 		return html;
+	}
+
+	getSignupsPlayersHtml(customBackgroundColor: string | undefined, mascotAndNameHtml: string, playerCount: number, playerNames: string):
+		string {
+		let html = "";
+
+		let validBackground = false;
+		if (customBackgroundColor && customBackgroundColor in Tools.hexCodes) {
+			validBackground = true;
+			html += "<span style='display: block;";
+			if (Tools.hexCodes[customBackgroundColor]!.textColor) {
+				html += 'color: ' + Tools.hexCodes[customBackgroundColor]!.textColor + ';';
+			} else {
+				html += 'color: #000000;';
+			}
+			html += "background: " + Tools.hexCodes[customBackgroundColor]!.gradient + "'";
+			html += ">";
+		}
+
+		html += "<div class='infobox'>" + mascotAndNameHtml + "<br /><br /><b>Players (" + playerCount + ")</b>: " + playerNames + "</div>";
+
+		if (validBackground) html += "</span>";
+
+		return html;
+	}
+
+	getJoinLeaveHtml(customButtonColor: string | undefined, freejoin: boolean, room: Room): string {
+		let buttonStyle = '';
+		if (customButtonColor && customButtonColor in Tools.hexCodes) {
+			if (Tools.hexCodes[customButtonColor]!.textColor) {
+				buttonStyle += 'color: ' + Tools.hexCodes[customButtonColor]!.textColor + ';';
+			} else {
+				buttonStyle += 'color: #000000;';
+			}
+			buttonStyle += "background: " + Tools.hexCodes[customButtonColor]!.color;
+		}
+
+		let html = "<center>";
+		if (freejoin) {
+			html += "<b>This game is free-join!</b>";
+		} else {
+			html += Client.getPmSelfButton(Config.commandCharacter + "joingame " + room.id, "Join game", false, buttonStyle);
+			html += " | ";
+			html += Client.getPmSelfButton(Config.commandCharacter + "leavegame " + room.id, "Leave game", false, buttonStyle);
+		}
+		html += "</center>";
+
+		return html;
+	}
+
+	getHostCustomDisplay(host: string, backgroundColor: HexCode | undefined, trainerChoices: ITrainerPick[],
+		pokemonChoices: IPokemonPick[], pokemonIcons: boolean): string {
+		const centered = trainerChoices.length > 0 || !pokemonIcons;
+		let html = "";
+		if (centered) html += "<center>";
+
+		html += "<span";
+		if (backgroundColor && backgroundColor in Tools.hexCodes) {
+			html += " style='display: block;";
+			if (Tools.hexCodes[backgroundColor]!.textColor) {
+				html += 'color: ' + Tools.hexCodes[backgroundColor]!.textColor + ';';
+			} else {
+				html += 'color: #000000;';
+			}
+			html += "background: " + Tools.hexCodes[backgroundColor]!.gradient + "'";
+		}
+		html += ">";
+
+		let trainerHtml = "";
+		for (const choice of trainerChoices) {
+			const trainerSpriteId = Dex.getTrainerSpriteId(choice.trainer);
+			if (trainerSpriteId) {
+				if (trainerHtml) trainerHtml += "&nbsp;";
+				trainerHtml += Dex.getTrainerSprite(trainerSpriteId);
+			}
+		}
+
+		let staticSprites = false;
+		const gifsOrIcons: string[] = [];
+		for (const choice of pokemonChoices) {
+			const pokemon = Dex.getPokemon(choice.pokemon);
+			if (!pokemon || (!pokemonIcons && !Dex.hasModelData(pokemon, choice.generation))) {
+				continue;
+			}
+
+			if (!staticSprites && choice.generation !== 'xy' && choice.generation !== 'bw') staticSprites = true;
+
+			gifsOrIcons.push(pokemonIcons ? Dex.getPSPokemonIcon(pokemon) + pokemon.name :
+				Dex.getPokemonModel(pokemon, choice.generation, undefined, choice.shiny));
+		}
+
+		if (!trainerHtml && !gifsOrIcons.length) {
+			html += "&nbsp;";
+		}
+
+		if (trainerHtml) {
+			html += trainerHtml;
+			if (gifsOrIcons.length) html += "<br />";
+		}
+
+		html += gifsOrIcons.join(pokemonIcons ? ", " : staticSprites ? "" : "&nbsp;&nbsp;&nbsp;");
+
+		html += "</span>";
+		if (centered) html += "</center>";
+
+		return "<div class='infobox'>" + html + Client.getUserAttributionHtml(host) + "</div>";
 	}
 
 	updateGameCatalog(room: Room): void {
@@ -1537,7 +1742,7 @@ export class Games {
 				"* <code>" + commandCharacter + "gtimer off</code> - turn off the previously set timer",
 				"* <code>" + commandCharacter + "store [message or command]</code> - store a single message or command to be used " +
 					"throughout the game",
-				"* <code>" + commandCharacter + "store [key], [message or command]</code> - store one of many messages or commands " +
+				"* <code>" + commandCharacter + "storem [key], [message or command]</code> - store one of many messages or commands " +
 					"to be used throughout the game using the specified key",
 				"* <code>" + commandCharacter + "stored [key]</code> - display a stored message or use a stored command, optionally " +
 					"the message matching the specified key",
@@ -1598,21 +1803,21 @@ export class Games {
 			document = document.concat(userHostCommands);
 		}
 
-		let allowOneVsOneGames = false;
-		if (Config.allowOneVsOneGames) {
-			if (Config.allowOneVsOneGames.includes(room.id)) {
-				allowOneVsOneGames = true;
+		let allowChallengeGames = false;
+		if (Config.allowChallengeGames) {
+			if (Config.allowChallengeGames.includes(room.id)) {
+				allowChallengeGames = true;
 			} else if (Config.subRooms && room.id in Config.subRooms) {
 				for (const subRoom of Config.subRooms[room.id]) {
-					if (Config.allowOneVsOneGames.includes(subRoom)) {
-						allowOneVsOneGames = true;
+					if (Config.allowChallengeGames.includes(subRoom)) {
+						allowChallengeGames = true;
 						break;
 					}
 				}
 			}
 		}
 
-		if (allowOneVsOneGames) {
+		if (allowChallengeGames) {
 			const oneVsOneGames: string[] = ["## One vs. one challenges", "Commands:",
 				"* <code>" + commandCharacter + "1v1c [user], [game]</code> - challenge [user] to a game of [game] (see list below)",
 				"* <code>" + commandCharacter + "a1v1c</code> - accept a challenge",
@@ -1622,15 +1827,32 @@ export class Games {
 					"[room] in PMs",
 				"\n\nCompatible games:",
 			];
+
+			const botChallengeGames: string[] = ["## Bot challenges", "Commands:",
+				"* <code>" + commandCharacter + "botch [game] or " + commandCharacter + "botch [options], [game]</code> - challenge " +
+					Users.self.name + " to a game of [game] (see list below)",
+				"* <code>" + commandCharacter + "ccdown [room], bot</code> - check your bot challenge cooldown time for " +
+					"[room] in PMs",
+				"\n\nCompatible games:",
+			];
+
 			const keys = Object.keys(this.formats);
 			keys.sort();
 			for (const key of keys) {
 				const format = this.getExistingFormat(key);
-				if (format.disabled || format.tournamentGame || format.noOneVsOne) continue;
-				oneVsOneGames.push("* " + format.name + "\n");
+				if (format.disabled || format.tournamentGame) continue;
+				if (!(format.disallowedChallenges && format.disallowedChallenges.onevsone)) {
+					oneVsOneGames.push("* " + format.name + "\n");
+				}
+				if (format.botChallenge && format.botChallenge.enabled) {
+					let name = format.name;
+					if (format.botChallenge.requiredFreejoin) name += " (freejoin)";
+					botChallengeGames.push("* " + name + "\n");
+				}
 			}
 
 			document = document.concat(oneVsOneGames);
+			document = document.concat(botChallengeGames);
 		}
 
 		const defaultCategory = "Uncategorized";
@@ -1743,7 +1965,7 @@ export class Games {
 		}
 
 		if (allowsGameAchievements) {
-			const internalFormatKeys = Object.keys(this.internalFormats) as InternalGameKey[];
+			const internalFormatKeys = Object.keys(this.internalFormats) as InternalGame[];
 			internalFormatKeys.sort();
 
 			const formatKeys = Object.keys(this.formats);
@@ -1809,6 +2031,100 @@ export class Games {
 		Tools.editGist(Config.githubApiCredentials.gist.username, Config.githubApiCredentials.gist.token,
 			Config.gameCatalogGists[room.id].id, Config.gameCatalogGists[room.id].description, {[filename]: {content, filename}});
 	}
+
+	/* eslint-disable @typescript-eslint/no-unnecessary-condition */
+	private onReload(previous: Games): void {
+		if (previous.autoCreateTimers) {
+			for (const i in previous.autoCreateTimers) {
+				clearTimeout(previous.autoCreateTimers[i]);
+				delete previous.autoCreateTimers[i];
+			}
+
+			for (const i in previous.autoCreateTimerData) {
+				const room = Rooms.get(i);
+				if (room) {
+					const data = previous.autoCreateTimerData[i];
+					let timer = data.endTime - Date.now();
+					if (timer < 5000) timer = 5000;
+					this.setAutoCreateTimer(room, data.type, timer);
+				}
+			}
+		}
+
+		if (previous.gameCooldownMessageTimers) {
+			for (const i in previous.gameCooldownMessageTimers) {
+				clearTimeout(previous.gameCooldownMessageTimers[i]);
+				delete previous.gameCooldownMessageTimers[i];
+			}
+
+			for (const i in previous.gameCooldownMessageTimerData) {
+				const room = Rooms.get(i);
+				if (room) {
+					const data = previous.gameCooldownMessageTimerData[i];
+					let timer = data.endTime - Date.now();
+					if (timer < 5000) timer = 5000;
+					this.setGameCooldownMessageTimer(room, data.minigameCooldownMinutes, timer);
+				}
+			}
+		}
+
+		if (previous.lastCatalogUpdates) Object.assign(this.lastCatalogUpdates, previous.lastCatalogUpdates);
+		if (previous.lastGames) Object.assign(this.lastGames, previous.lastGames);
+		if (previous.lastMinigames) Object.assign(this.lastMinigames, previous.lastMinigames);
+		if (previous.lastChallengeTimes) Object.assign(this.lastChallengeTimes, previous.lastChallengeTimes);
+		if (previous.lastScriptedGames) Object.assign(this.lastScriptedGames, previous.lastScriptedGames);
+		if (previous.lastUserHostedGames) Object.assign(this.lastUserHostedGames, previous.lastUserHostedGames);
+		if (previous.lastUserHostTimes) Object.assign(this.lastUserHostTimes, previous.lastUserHostTimes);
+		if (previous.lastUserHostFormatTimes) Object.assign(this.lastUserHostFormatTimes, previous.lastUserHostFormatTimes);
+
+		if (previous.nextVoteBans) {
+			for (const i in previous.nextVoteBans) {
+				this.nextVoteBans[i] = previous.nextVoteBans[i].slice();
+			}
+		}
+
+		for (const i in previous) {
+			// @ts-expect-error
+			delete previous[i];
+		}
+
+		this.loadFormats();
+		if (Config.gameCatalogGists) {
+			for (const i in Config.gameCatalogGists) {
+				const room = Rooms.get(i);
+				if (room) this.updateGameCatalog(room);
+			}
+		}
+	}
+	/* eslint-enable */
+
+	private loadFileAchievements(file: DeepImmutable<IGameFile>): void {
+		if (!file.class.achievements) return;
+		for (const key in file.class.achievements) {
+			const achievement = file.class.achievements[key]!;
+			if (Tools.toId(achievement.name) !== key) {
+				throw new Error(file.name + "'s achievement " + achievement.name + " needs to have the key '" +
+					Tools.toId(achievement.name) + "'");
+			}
+			if (key in this.achievements) {
+				if (this.achievements[key].name !== achievement.name) {
+					throw new Error(file.name + "'s achievement '" + key + "' has the name '" + this.achievements[key].name +
+						"' in another game.");
+				}
+				if (this.achievements[key].description !== achievement.description) {
+					throw new Error(file.name + "'s achievement '" + key + "' has the description '" + this.achievements[key].description +
+						"' in another game.");
+				}
+				continue;
+			}
+			this.achievements[key] = achievement;
+		}
+	}
+
+	private clearAutoCreateTimer(room: Room): void {
+		if (room.id in this.autoCreateTimers) clearTimeout(this.autoCreateTimers[room.id]);
+		delete this.autoCreateTimerData[room.id];
+	}
 }
 
 export const instantiate = (): void => {
@@ -1817,6 +2133,7 @@ export const instantiate = (): void => {
 	global.Games = new Games();
 
 	if (oldGames) {
+		// @ts-expect-error
 		global.Games.onReload(oldGames);
 	}
 };

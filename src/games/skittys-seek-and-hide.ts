@@ -168,7 +168,6 @@ class SkittysSeekAndHide extends ScriptedGame {
 
 const commands: GameCommandDefinitions<SkittysSeekAndHide> = {
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canSelect) return false;
 			const player = this.players[user.id];
@@ -206,7 +205,6 @@ const commands: GameCommandDefinitions<SkittysSeekAndHide> = {
 
 const tests: GameFileTests<SkittysSeekAndHide> = {
 	'should have parameters for all possible numbers of remaining players': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const minPlayers = Math.max(2, game.minPlayers - 1);
 			const maxPlayers = game.maxPlayers - 1;
@@ -227,14 +225,16 @@ const tests: GameFileTests<SkittysSeekAndHide> = {
 
 export const game: IGameFile<SkittysSeekAndHide> = {
 	aliases: ['skittys', 'ssh'],
-	category: 'strategy',
+	category: 'luck',
 	class: SkittysSeekAndHide,
 	commandDescriptions: [Config.commandCharacter + "select [Pokemon]"],
 	commands,
 	description: "Each round, players choose Pokemon to hide behind based on the given parameters. " +
 		"The Pokemon that the most players hide behind will steal 1 life!",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Skitty's Seek and Hide",
-	noOneVsOne: true,
 	mascot: "Skitty",
 	nonTrivialLoadData: true,
 	tests,

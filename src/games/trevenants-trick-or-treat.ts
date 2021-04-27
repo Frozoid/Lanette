@@ -125,7 +125,6 @@ class TrevenantsTrickOrTreat extends ScriptedGame {
 
 const commands: GameCommandDefinitions<TrevenantsTrickOrTreat> = {
 	trick: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.started || !this.pokemonGrid.length) return false;
 			const move = Dex.getMove(target);
@@ -215,7 +214,7 @@ const commands: GameCommandDefinitions<TrevenantsTrickOrTreat> = {
 
 export const game: IGameFile<TrevenantsTrickOrTreat> = {
 	aliases: ["trevenants", "ttt", "trickortreat"],
-	category: 'knowledge',
+	category: 'knowledge-2',
 	commandDescriptions: [Config.commandCharacter + "trick [move]"],
 	commands,
 	class: TrevenantsTrickOrTreat,

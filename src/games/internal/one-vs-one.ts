@@ -21,12 +21,12 @@ export class OneVsOne extends ScriptedGame {
 
 	setupChallenge(challenger: User, defender: User, challengeFormat: IGameFormat): void {
 		this.challengeFormat = challengeFormat;
-		this.defender = this.createPlayer(defender)!;
-		this.challenger = this.createPlayer(challenger)!;
+		this.defender = this.createPlayer(defender);
+		this.challenger = this.createPlayer(challenger);
 		this.minPlayers = 2;
 		this.name += " (" + challengeFormat.nameWithOptions + ")";
 
-		const text = this.challenger.name + " challenges " + this.defender.name + " to a one vs. one game of " +
+		const text = this.challenger!.name + " challenges " + this.defender!.name + " to a one vs. one game of " +
 			challengeFormat.nameWithOptions + "!";
 		this.on(text, () => {
 			this.canAcceptChallenge = true;
@@ -54,13 +54,13 @@ export class OneVsOne extends ScriptedGame {
 		if (this.timeout) clearTimeout(this.timeout);
 
 		this.originalModchat = this.room.modchat;
-		this.say("/modchat +");
+		this.room.setModchat("+");
 		if (!user.hasRank(this.room, 'voice')) {
-			this.say("/roomvoice " + user.name);
+			this.room.roomVoice(user.name);
 			this.defenderPromotedName = user.id;
 		}
 		if (!challenger.hasRank(this.room, 'voice')) {
-			this.say("/roomvoice " + challenger.name);
+			this.room.roomVoice(challenger.name);
 			this.challengerPromotedName = challenger.id;
 		}
 
@@ -154,16 +154,13 @@ export class OneVsOne extends ScriptedGame {
 	}
 
 	resetModchatAndRanks(): void {
-		this.say("/modchat " + this.originalModchat);
-		if (this.challengerPromotedName) this.say("/roomdeauth " + this.challengerPromotedName);
-		if (this.defenderPromotedName) this.say("/roomdeauth " + this.defenderPromotedName);
+		this.room.setModchat(this.originalModchat);
+		if (this.challengerPromotedName) this.room.roomDeAuth(this.challengerPromotedName);
+		if (this.defenderPromotedName) this.room.roomDeAuth(this.defenderPromotedName);
 	}
 
 	updateLastChallengeTime(): void {
-		if (!this.challenger) return;
-
-		if (!(this.room.id in Games.lastOneVsOneChallengeTimes)) Games.lastOneVsOneChallengeTimes[this.room.id] = {};
-		Games.lastOneVsOneChallengeTimes[this.room.id][this.challenger.id] = Date.now();
+		if (this.challenger) Games.setLastChallengeTime('onevsone', this.room, this.challenger.id, Date.now());
 	}
 
 	onEnd(): void {

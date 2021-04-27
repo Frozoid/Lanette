@@ -234,21 +234,20 @@ class DarkraisLair extends MapGame {
 		const coordinateString = this.coordinatesToString(playerCoordinates[0], playerCoordinates[1]);
 		const usedShadowTraps = this.playerUsedShadowTraps.get(player)!;
 		const keys = Object.keys(shadowTraps) as ShadowTrap[];
-		let cannotLayTrap = this.roundShadowTraps.has(player);
+		const inShadowTrap = this.roundShadowTraps.has(player);
+
 		for (const key of keys) {
 			let remainingUses: number | undefined;
 			if (shadowTraps[key].uses) {
-				remainingUses = shadowTraps[key].uses!;
+				remainingUses = shadowTraps[key].uses;
 				if (key in usedShadowTraps) {
-					remainingUses -= usedShadowTraps[key]!;
+					remainingUses! -= usedShadowTraps[key]!;
 				}
 			}
 
-			if (!cannotLayTrap) {
-				cannotLayTrap = !remainingUses || coordinateString in this.shadowPits ||
-					(key !== 'dreamvision' && coordinateString in this.placedShadowTraps) ||
-					(this.trappedPlayers.has(player) && !this.inPlaceShadowTraps.includes(key));
-			}
+			const cannotLayTrap = inShadowTrap || remainingUses === 0 || coordinateString in this.shadowPits ||
+				(key !== 'dreamvision' && coordinateString in this.placedShadowTraps) ||
+				(this.trappedPlayers.has(player) && !this.inPlaceShadowTraps.includes(key));
 
 			html += Client.getPmSelfButton(Config.commandCharacter + key, shadowTraps[key].name +
 				(remainingUses ? " x" + remainingUses : ""), cannotLayTrap) + "&nbsp;";
@@ -301,11 +300,6 @@ class DarkraisLair extends MapGame {
 
 		if (emptyTeams >= this.teamCount - 1) {
 			this.say("Only one team remains!");
-			const winningTeam = this.getFinalTeam()!;
-			for (const player of winningTeam.players) {
-				this.winners.set(player, 1);
-			}
-
 			this.timeout = setTimeout(() => this.end(), 5000);
 			return;
 		}
@@ -724,9 +718,11 @@ export const game: IGameFile<DarkraisLair> = Games.copyTemplateProperties(mapGam
 		"<br />" +
 		"<code>" + Config.commandCharacter + "dvision</code> (<b>Dream Vision</b>) - shows you the player you are currently closest to" +
 		"</details>",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Darkrai's Lair",
 	mascot: "Darkrai",
 	scriptedOnly: true,
-	noOneVsOne: true,
 	tests,
 });

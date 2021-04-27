@@ -35,6 +35,12 @@ module.exports = (inputOptions: Dict<string>): void => {
 		require(path.join(rootFolder, 'built', 'app.js'))();
 		clearInterval(Storage.globalDatabaseExportInterval);
 
+		// allow tests to assert on Client's outgoingMessageQueue
+		// @ts-expect-error
+		Client.webSocket = {};
+		// @ts-expect-error
+		Client.pauseOutgoingMessages = true;
+
 		const mochaRoom = Rooms.add('mocha');
 		mochaRoom.setTitle('Mocha');
 
@@ -50,8 +56,9 @@ module.exports = (inputOptions: Dict<string>): void => {
 
 		if (!loadGames && loadWorkers) {
 			console.log("Loading worker data for tests...");
-			Games.workers.parameters.init();
-			Games.workers.portmanteaus.init();
+			const workers = Games.getWorkers();
+			workers.parameters.init();
+			workers.portmanteaus.init();
 			console.log("Loaded worker data");
 		}
 
@@ -61,7 +68,7 @@ module.exports = (inputOptions: Dict<string>): void => {
 			if (testOptions.games) {
 				formats = testOptions.games.split(',');
 			} else {
-				formats = Object.keys(Games.formats);
+				formats = Object.keys(Games.getFormats());
 			}
 
 			const unflaggedGames: string[] = [];

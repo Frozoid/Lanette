@@ -95,7 +95,6 @@ class PonytasPinataParty extends ScriptedGame {
 
 const commands: GameCommandDefinitions<PonytasPinataParty> = {
 	hit: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canHit) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -109,6 +108,7 @@ const commands: GameCommandDefinitions<PonytasPinataParty> = {
 
 export const game: IGameFile<PonytasPinataParty> = {
 	aliases: ['ponytas', 'pinataparty', 'ppp'],
+	category: 'luck',
 	class: PonytasPinataParty,
 	commandDescriptions: [Config.commandCharacter + "hit"],
 	commands,

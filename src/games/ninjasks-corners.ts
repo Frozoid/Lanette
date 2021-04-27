@@ -33,9 +33,8 @@ class NinjasksCorners extends ScriptedGame {
 		this.nextRound();
 	}
 
-	onNextRound(): void {
-		this.canTravel = false;
-		if (this.round > 1 && !this.format.options.freejoin) {
+	checkRoundTravels(): void {
+		if (!this.format.options.freejoin) {
 			for (const i in this.players) {
 				if (this.players[i].eliminated) continue;
 				const player = this.players[i];
@@ -57,6 +56,12 @@ class NinjasksCorners extends ScriptedGame {
 			if (this.getRemainingPlayerCount() < 2) return this.end();
 		}
 
+		this.nextRound();
+	}
+
+	onNextRound(): void {
+		this.canTravel = false;
+
 		let color = this.sampleOne(colors);
 		while (color === this.lastColor) {
 			color = this.sampleOne(colors);
@@ -73,7 +78,8 @@ class NinjasksCorners extends ScriptedGame {
 				const text = "The corner is **" + color + "**!";
 				this.on(text, () => {
 					this.canTravel = true;
-					this.timeout = setTimeout(() => this.nextRound(), this.roundTime);
+					if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint(color, [], true);
+					this.timeout = setTimeout(() => this.checkRoundTravels(), this.roundTime);
 				});
 				this.say(text);
 			}, this.sampleOne([4000, 5000, 6000]));
@@ -86,7 +92,7 @@ class NinjasksCorners extends ScriptedGame {
 			if (this.players[i].eliminated) continue;
 			const player = this.players[i];
 			if (player === this.firstTravel) this.unlockAchievement(player, NinjasksCorners.achievements.speedbooster);
-			this.winners.set(player, 1);
+			this.winners.set(player, this.format.options.freejoin ? this.points.get(player)! : 1);
 			this.addBits(player, 250);
 		}
 
@@ -94,11 +100,22 @@ class NinjasksCorners extends ScriptedGame {
 
 		this.announceWinners();
 	}
+
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			const command = "travel";
+			const answer = this.color;
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
 }
 
 const commands: GameCommandDefinitions<NinjasksCorners> = {
 	travel: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canTravel) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -106,6 +123,9 @@ const commands: GameCommandDefinitions<NinjasksCorners> = {
 			if (!color) return false;
 			if (this.format.options.freejoin) {
 				if (color !== this.color) return false;
+
+				if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+
 				let points = this.points.get(player) || 0;
 				points++;
 				this.points.set(player, points);
@@ -121,7 +141,7 @@ const commands: GameCommandDefinitions<NinjasksCorners> = {
 				// don't activate achievement if the player typos first
 				this.roundTravels.delete(player);
 				this.roundTravels.set(player, color);
-				if (this.getRemainingPlayerCount() === 2 && color === this.color) this.nextRound();
+				if (this.getRemainingPlayerCount() === 2 && color === this.color) this.checkRoundTravels();
 			}
 			return true;
 		},
@@ -130,6 +150,11 @@ const commands: GameCommandDefinitions<NinjasksCorners> = {
 
 export const game: IGameFile<NinjasksCorners> = {
 	aliases: ["ninjasks", "nc"],
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+		requiredFreejoin: true,
+	},
 	category: 'speed',
 	commandDescriptions: [Config.commandCharacter + "travel [color]"],
 	commands,

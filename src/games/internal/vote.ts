@@ -154,7 +154,7 @@ export class Vote extends ScriptedGame {
 	}
 
 	getHighlightPhrase(): string {
-		return Games.scriptedGameVoteHighlight;
+		return Games.getScriptedGameVoteHighlight();
 	}
 
 	onSignups(): void {
@@ -162,7 +162,7 @@ export class Vote extends ScriptedGame {
 		this.bannedFormats = Games.getNextVoteBans(this.room);
 
 		const votableFormats: string[] = [];
-		for (const i in Games.formats) {
+		for (const i in Games.getFormats()) {
 			const format = Games.getExistingFormat(i);
 			if (this.isValidFormat(format)) {
 				votableFormats.push(format.name);
@@ -248,8 +248,7 @@ export class Vote extends ScriptedGame {
 		this.updateVotesHtml(undefined, true);
 
 		this.notifyRankSignups = true;
-		this.sayCommand("/notifyrank all, " + this.room.title + " game vote,Help decide the next scripted game!," +
-			this.getHighlightPhrase(), true);
+		this.room.notifyRank("all", this.room.title + " game vote", "Help decide the next scripted game!", this.getHighlightPhrase());
 	}
 
 	endVoting(): void {
@@ -300,7 +299,6 @@ export class Vote extends ScriptedGame {
 
 const commands: GameCommandDefinitions<Vote> = {
 	vote: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canVote) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -360,7 +358,7 @@ const commands: GameCommandDefinitions<Vote> = {
 				this.updateVotesHtmlTimeout = setTimeout(() => {
 					this.updateVotesHtmlTimeout = null;
 					if (this.canVote) this.updateVotesHtml();
-				}, 500);
+				}, this.getSignupsUpdateDelay());
 			}
 
 			return true;
@@ -368,7 +366,6 @@ const commands: GameCommandDefinitions<Vote> = {
 		aliases: ['suggest'],
 	},
 	pmvote: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canVote) return false;
 			const player = this.createPlayer(user) || this.players[user.id];

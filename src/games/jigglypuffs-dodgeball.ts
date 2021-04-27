@@ -83,15 +83,9 @@ class JigglypuffsDodgeball extends ScriptedGame {
 	}
 
 	onEnd(): void {
-		let team: PlayerTeam | undefined;
-		for (const i in this.players) {
-			if (this.players[i].eliminated || this.players[i].frozen) continue;
-			team = this.players[i].team!;
-			break;
-		}
-
-		if (team) {
-			for (const player of team.players) {
+		const winningTeam = this.getFinalTeam();
+		if (winningTeam) {
+			for (const player of winningTeam.players) {
 				this.winners.set(player, 1);
 				let earnings = 250;
 				if (!player.eliminated && !player.frozen) earnings *= 2;
@@ -105,7 +99,6 @@ class JigglypuffsDodgeball extends ScriptedGame {
 
 const commands: GameCommandDefinitions<JigglypuffsDodgeball> = {
 	throw: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.players[user.id].frozen) return false;
 			const player = this.players[user.id];
@@ -132,7 +125,9 @@ export const game: IGameFile<JigglypuffsDodgeball> = {
 	commands,
 	class: JigglypuffsDodgeball,
 	description: "Players await Jigglypuff's <code>THROW</code> signal to eliminate the opposing team with their " + BALL_POKEMON + "!",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Jigglypuff's Dodgeball",
-	noOneVsOne: true,
 	mascot: "Jigglypuff",
 };

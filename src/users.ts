@@ -1,6 +1,6 @@
 import type { ScriptedGame } from "./room-game-scripted";
 import type { Room } from "./rooms";
-import type { GroupName, IChatLogEntry, MessageListener } from "./types/client";
+import type { GroupName, IChatLogEntry, IOutgoingMessage, MessageListener } from "./types/client";
 import type { IUserMessageOptions, IUserRoomData } from "./types/users";
 
 const chatFormatting: string[] = ["*", "_", "`", "~", "^", "\\"];
@@ -26,6 +26,27 @@ export class User {
 		this.setName(name);
 	}
 
+	setName(name: string): void {
+		name = Tools.stripHtmlCharacters(name);
+
+		while (chatFormatting.includes(name.charAt(0))) {
+			name = name.substr(1).trim();
+		}
+
+		while (chatFormatting.includes(name.substr(-1))) {
+			name = name.substr(0, name.length - 1).trim();
+		}
+
+		for (const formatting of chatFormatting) {
+			const doubleFormatting = formatting + formatting;
+			while (name.includes(doubleFormatting)) {
+				name = name.replace(doubleFormatting, "").trim();
+			}
+		}
+
+		this.name = name;
+	}
+
 	addChatLog(log: string): void {
 		this.chatLog.unshift({log, type: 'chat'});
 		this.trimChatLog();
@@ -47,27 +68,19 @@ export class User {
 		}
 	}
 
-	setName(name: string): void {
-		name = Tools.stripHtmlCharacters(name);
-
-		while (chatFormatting.includes(name.charAt(0))) {
-			name = name.substr(1);
-		}
-		while (chatFormatting.includes(name.substr(-1))) {
-			name = name.substr(0, name.length - 1);
-		}
-
-		this.name = name;
-	}
-
 	hasRank(room: Room, targetRank: GroupName): boolean {
-		if (!this.rooms.has(room) || !(targetRank in Client.groupSymbols)) return false;
-		return Client.serverGroups[this.rooms.get(room)!.rank].ranking >= Client.serverGroups[Client.groupSymbols[targetRank]].ranking;
+		if (!this.rooms.has(room)) return false;
+		const groupSymbols = Client.getGroupSymbols();
+		if (!(targetRank in groupSymbols)) return false;
+		const serverGroups = Client.getServerGroups();
+		return serverGroups[this.rooms.get(room)!.rank].ranking >= serverGroups[groupSymbols[targetRank]].ranking;
 	}
 
 	isBot(room: Room): boolean {
-		if (!this.rooms.has(room) || !Client.groupSymbols.bot) return false;
-		return this.rooms.get(room)!.rank === Client.groupSymbols.bot;
+		if (!this.rooms.has(room)) return false;
+		const groupSymbols = Client.getGroupSymbols();
+		if (!groupSymbols.bot) return false;
+		return this.rooms.get(room)!.rank === groupSymbols.bot;
 	}
 
 	isDeveloper(): boolean {
@@ -103,17 +116,21 @@ export class User {
 			}
 		}
 
-		Client.send({
+		const outgoingMessage: IOutgoingMessage = {
 			message: "|/pm " + this.name + ", " + message,
 			text: message,
-			type: 'pm',
+			type: options && options.type ? options.type : 'pm',
 			user: this.id,
 			measure: !(options && options.dontMeasure),
-		});
+		};
+
+		if (options && options.html) outgoingMessage.html = options.html;
+
+		Client.send(outgoingMessage);
 	}
 
-	sayCommand(command: string, dontCheckFilter?: boolean): void {
-		this.say(command, {dontCheckFilter, dontPrepare: true, dontMeasure: true});
+	sayCode(code: string): void {
+		this.say("!code " + code, {dontCheckFilter: true, dontPrepare: true, type: 'code', html: Client.getCodeListenerHtml(code)});
 	}
 
 	on(message: string, listener: MessageListener): void {
@@ -149,6 +166,15 @@ export class User {
 		if (!(id in this.uhtmlMessageListeners)) return;
 		delete this.uhtmlMessageListeners[id][Tools.toId(Client.getListenerUhtml(html, true))];
 	}
+
+	getBotRoom(): Room | undefined {
+		let botRoom: Room | undefined;
+		this.rooms.forEach((data, room) => {
+			if (!botRoom && global.Users.self.isBot(room) && room.type === 'chat') botRoom = room;
+		});
+
+		return botRoom;
+	}
 }
 
 export class Users {
@@ -159,6 +185,10 @@ export class Users {
 	constructor() {
 		const username = Config.username || "Self";
 		this.self = this.add(username, Tools.toId(username));
+	}
+
+	getNameFormattingList(): string[] {
+		return chatFormatting;
 	}
 
 	/** Should only be used when interacting with a potentially new user (in Client) */

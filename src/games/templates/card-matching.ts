@@ -1,7 +1,7 @@
 import type { Player } from '../../room-activity';
 import { addPlayers, assert } from '../../test/test-tools';
 import type {
-	GameCategory, GameCommandDefinitions, GameFileTests, IGameAchievement, IGameTemplateFile
+	GameCommandDefinitions, GameFileTests, IGameAchievement, IGameTemplateFile
 } from '../../types/games';
 import type { IPokemon } from '../../types/pokemon-showdown';
 import type { IActionCardData, ICard, IPokemonCard } from './card';
@@ -57,7 +57,7 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 	abstract playActionCard(card: ICard, player: Player, targets: string[], cards: ICard[]): boolean;
 
 	filterForme(forme: IPokemon): boolean {
-		const baseSpecies = Dex.getExistingPokemon(forme.baseSpecies);
+		const baseSpecies = this.getDex().getExistingPokemon(forme.baseSpecies);
 		if ((baseSpecies.color !== forme.color || !Tools.compareArrays(baseSpecies.types, forme.types)) &&
 			!(baseSpecies.name === "Arceus" || baseSpecies.name === "Silvally")) return true;
 		return false;
@@ -70,7 +70,7 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 		if (!this.deckPool.length) this.createDeckPool();
 		const pokedex = this.shuffle(this.deckPool);
 		const deck: ICard[] = [];
-		const minimumDeck = (this.maxPlayers + 1) * this.format.options.cards;
+		const minimumDeck = (this.playerCount + 1) * this.format.options.cards;
 		outer:
 		for (const pokemon of pokedex) {
 			if (this.colorsLimit && pokemon.color in colorCounts && colorCounts[pokemon.color] >= this.colorsLimit) continue;
@@ -97,6 +97,7 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 				if (!(type in typeCounts)) typeCounts[type] = 0;
 				typeCounts[type]++;
 			}
+
 			if (this.rollForShinyPokemon()) pokemon.shiny = true;
 			deck.push(pokemon);
 		}
@@ -106,7 +107,9 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 			return;
 		}
 
-		const actionCards = Object.keys(this.actionCards);
+		const actionCards = Object.keys(this.actionCards)
+			// @ts-expect-error
+			.filter(x => !(this.requiredGen && (this.actionCards[x] as IActionCardData).noOldGen));
 		if (actionCards.length && this.usesActionCards) {
 			let actionCardAmount = this.actionCardAmount;
 			let totalActionCards = actionCards.length * actionCardAmount;
@@ -158,17 +161,18 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 		let html = '<div class="infobox" style="width: ' + width + 'px">';
 		const displayNames: string[] = [];
 		const names: string[] = [];
+		const pokemonKeys = this.getDex().getData().pokemonKeys;
 		for (const card of group) {
 			names.push(card.name);
 
 			let displayName = '';
-			if (Dex.data.pokemonKeys.includes(card.id)) {
+			if (pokemonKeys.includes(card.id)) {
 				displayName += Dex.getPokemonIcon(Dex.getExistingPokemon(card.name));
 			}
 			displayName += card.name;
 			displayNames.push(displayName);
 		}
-		html += Client.getPmSelfButton(Config.commandCharacter + "play " + names.join(", "), "Play pair!") + "<br />";
+		html += Client.getMsgRoomButton(this.room, Config.commandCharacter + "play " + names.join(", "), "Play pair!") + "<br />";
 		html += '<center>';
 		html += displayNames.join("<br />");
 		html += '</center></div>';
@@ -247,20 +251,21 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 
 		if (player && showPlayable) {
 			if (card.action && card.action.getRandomTarget) {
-				html += Client.getPmSelfButton(Config.commandCharacter + "play " +
-					card.action.getRandomTarget(this, this.playerCards.get(player)!), "Play randomized") + " or play manually!";
+				html += Client.getMsgRoomButton(this.room, Config.commandCharacter + "play " +
+					card.action.getRandomTarget(this, this.playerCards.get(player)!), "Play randomized", player.eliminated) +
+					" or play manually!";
 			} else {
 				if (card.action && card.action.requiredTarget) {
 					html += '<b>Play manually!</b>';
 				} else {
-					html += Client.getPmSelfButton(Config.commandCharacter + "play " + card.name, "Play!");
+					html += Client.getMsgRoomButton(this.room, Config.commandCharacter + "play " + card.name, "Play!", player.eliminated);
 				}
 			}
 			html += '<br />';
 		}
 
 		html += '<center>';
-		if (Dex.data.pokemonKeys.includes(card.id)) {
+		if (this.getDex().getData().pokemonKeys.includes(card.id)) {
 			html += Dex.getPokemonIcon(Dex.getExistingPokemon(card.name));
 		}
 		html += card.name + '<br />';
@@ -451,7 +456,9 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 
 		this.say(player.name + " did not play a card and has been eliminated from the game!" + (autoPlay ? " Auto-playing: " +
 			autoPlay : ""));
-		this.eliminatePlayer(player, "You did not play a card!");
+		this.eliminatePlayer(player);
+		this.updatePlayerHtmlPage(player);
+
 		if (autoPlay) {
 			player.useCommand('play', autoPlay);
 		} else {
@@ -497,7 +504,7 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 				const lives = this.addLives(player, -1);
 				if (!lives) {
 					skippedPlayerCount++;
-					this.eliminatePlayer(player, "You do not have a card to play!");
+					this.eliminatePlayer(player);
 					if (this.getRemainingPlayerCount() === 1) {
 						finalPlayer = true;
 						break;
@@ -505,8 +512,6 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 					this.say(player.name + " " + eliminatedText);
 				} else {
 					this.say(player.name + " does not have a card to play and has lost a life!");
-					player.say("You do not have a card to play! You have " + lives + " " +
-						(lives === 1 ? "life" : "lives") + " remaining!");
 				}
 			} else {
 				skippedPlayerCount++;
@@ -569,6 +574,8 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 			this.updatePlayerHtmlPage(player!);
 			player!.sendHighlightPage("It is your turn!");
 
+			if (this.parentGame && this.parentGame.onChildPlayerTurn) this.parentGame.onChildPlayerTurn(player!);
+
 			const timeAfterWarning = this.turnTimeLimit - this.turnWarningTime;
 			this.timeout = setTimeout(() => {
 				const timeAfterWarningString = Tools.toDurationString(timeAfterWarning);
@@ -577,10 +584,11 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 				this.timeout = setTimeout(() => {
 					if (!player!.eliminated) {
 						if (this.finitePlayerCards) {
-							if (this.addPlayerInactiveRound(player!) && !(this.parentGame && this.parentGame.id === '1v1challenge')) {
+							if (this.addPlayerInactiveRound(player!)) {
 								this.say(player!.name + " DQed for inactivity!");
 								// nextRound() called in onRemovePlayer
-								this.eliminatePlayer(player!, "You did not play a card for " + this.playerInactiveRoundLimit + " rounds!");
+								this.eliminatePlayer(player!);
+								this.updatePlayerHtmlPage(player!);
 
 								const newFinalPlayer = this.getFinalPlayer();
 								if (newFinalPlayer) newFinalPlayer.metWinCondition = true;
@@ -743,11 +751,34 @@ export abstract class CardMatching<ActionCardsType = Dict<IActionCardData>> exte
 		if (player.eliminated) return;
 		this.updatePlayerHtmlPage(player);
 	}
+
+	botChallengeTurn(botPlayer: Player): void {
+		const cards = this.playerCards.get(botPlayer);
+		if (!cards) throw new Error(botPlayer.name + " has no hand");
+
+		const turnCards = this.getTurnCards(botPlayer);
+		let play: string | undefined;
+		if (turnCards.group.length) {
+			play = this.sampleOne(turnCards.group).map(x => x.name).join(", ");
+		} else if (turnCards.single.length) {
+			play = this.sampleOne(turnCards.single).name;
+		} else if (turnCards.action.length) {
+			play = this.sampleOne(turnCards.action).action!.getAutoPlayTarget(this, cards);
+		}
+
+		if (!play) throw new Error(botPlayer.name + " does not have a card to play");
+
+		this.botTurnTimeout = setTimeout(() => {
+			this.say(Config.commandCharacter + "play " + play);
+			this.botTurnTimeout = setTimeout(() => {
+				botPlayer.useCommand("play", play);
+			}, 300);
+		}, this.sampleOne([2000, 3000, 4000]));
+	}
 }
 
 const commands: GameCommandDefinitions<CardMatching> = {
 	play: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canPlay || this.players[user.id].frozen || this.currentPlayer !== this.players[user.id]) return false;
 			const targets = target.split(",");
@@ -764,11 +795,9 @@ const commands: GameCommandDefinitions<CardMatching> = {
 				if (!id) {
 					user.say("You must specify a card.");
 				} else {
-					const pokemon = Dex.data.pokemonKeys.includes(id);
-					const move = Dex.data.moveKeys.includes(id);
-					if (pokemon) {
+					if (Dex.getData().pokemonKeys.includes(id)) {
 						user.say("You do not have [ " + Dex.getExistingPokemon(cardName).name + " ].");
-					} else if (move) {
+					} else if (Dex.getData().moveKeys.includes(id)) {
 						user.say("You do not have [ " + Dex.getExistingMove(cardName).name + " ].");
 					} else {
 						user.say("'" + cardName + "' is not a valid Pokemon or move.");
@@ -795,13 +824,11 @@ const commands: GameCommandDefinitions<CardMatching> = {
 			this.nextRound();
 			return true;
 		},
-		aliases: ['pmplay'],
-		pmGameCommand: true,
 		eliminatedGameCommand: true,
 	},
 };
 
-commands.summary = Tools.deepClone(Games.sharedCommands.summary);
+commands.summary = Tools.deepClone(Games.getSharedCommands().summary);
 commands.summary.aliases = ['cards', 'hand'];
 
 const tests: GameFileTests<CardMatching> = {
@@ -831,7 +858,9 @@ const tests: GameFileTests<CardMatching> = {
 };
 
 export const game: IGameTemplateFile<CardMatching> = Object.assign(Tools.deepClone(cardGame), {
-	category: 'luck' as GameCategory,
+	botChallenge: {
+		enabled: true,
+	},
 	commands: Object.assign(Tools.deepClone(cardGame.commands), commands),
 	modes: undefined,
 	modeProperties: undefined,

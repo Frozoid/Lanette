@@ -132,7 +132,7 @@ class FeebasChainFishing extends ScriptedGame {
 				this.winners.clear();
 				highestPoints = points;
 			}
-			if (points === highestPoints) this.winners.set(player, 1);
+			if (points === highestPoints) this.winners.set(player, points);
 		}
 
 		this.winners.forEach((value, player) => {
@@ -145,7 +145,6 @@ class FeebasChainFishing extends ScriptedGame {
 
 const commands: GameCommandDefinitions<FeebasChainFishing> = {
 	reel: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.roundReels.has(this.players[user.id])) return false;
 			const player = this.createPlayer(user) || this.players[user.id];

@@ -37,6 +37,7 @@ class PanchamPairs extends ScriptedGame {
 	paired = new Set<Player>();
 	pairRound: number = 0;
 	points = new Map<Player, number>();
+	roundTime: number = 15 * 1000;
 
 	static loadData(): void {
 		for (const pokemon of Games.getPokemonList()) {
@@ -128,9 +129,11 @@ class PanchamPairs extends ScriptedGame {
 				this.timeout = setTimeout(() => {
 					this.say("Time is up! " + this.getAnswers(""));
 					this.end();
-				}, 15 * 1000);
-			} else if (!this.format.options.freejoin) {
-				this.timeout = setTimeout(() => this.listPossiblePairs(), 15 * 1000);
+				}, this.roundTime);
+			} else if (this.format.options.freejoin) {
+				if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint("", [], true);
+			} else {
+				this.timeout = setTimeout(() => this.listPossiblePairs(), this.roundTime);
 			}
 		});
 		this.sayUhtmlAuto(uhtmlName, html);
@@ -292,11 +295,22 @@ class PanchamPairs extends ScriptedGame {
 		}
 		return false;
 	}
+
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			const command = "pair";
+			const answer = this.getRandomPair()!.join(", ").toLowerCase();
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
 }
 
 const commands: GameCommandDefinitions<PanchamPairs> = {
 	pair: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canPair) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -317,10 +331,12 @@ const commands: GameCommandDefinitions<PanchamPairs> = {
 			if (this.isMiniGame) {
 				this.say((this.pm ? "You are" : "**" + user.name + "** is") + " correct! " + this.getAnswers(pair[0] + " & " +
 					pair[1] + " (" + param + ")"));
-				this.addBits(user, Games.minigameBits);
+				this.addBits(user, Games.getMinigameBits());
 				this.end();
 				return true;
 			}
+
+			if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
 
 			if (this.format.options.freejoin) {
 				let points = this.points.get(player) || 0;
@@ -368,7 +384,12 @@ const commands: GameCommandDefinitions<PanchamPairs> = {
 
 export const game: IGameFile<PanchamPairs> = {
 	aliases: ["panchams", "pairs"],
-	category: 'knowledge',
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+		requiredFreejoin: true,
+	},
+	category: 'knowledge-3',
 	commandDescriptions: [Config.commandCharacter + "pair [name, name, param type]"],
 	commands,
 	class: PanchamPairs,

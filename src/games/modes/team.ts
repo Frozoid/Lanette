@@ -78,10 +78,10 @@ class Team {
 	}
 
 	onRemovePlayer(this: TeamThis, player: Player): void {
-		if (!this.started) return;
+		if (!this.started || !player.team) return;
 
-		const playerOrderIndex = this.playerOrders[player.team!.id].indexOf(player);
-		if (playerOrderIndex !== -1) this.playerOrders[player.team!.id].splice(playerOrderIndex, 1);
+		const playerOrderIndex = this.playerOrders[player.team.id].indexOf(player);
+		if (playerOrderIndex !== -1) this.playerOrders[player.team.id].splice(playerOrderIndex, 1);
 
 		this.setLargestTeam();
 	}
@@ -125,9 +125,9 @@ class Team {
 				let player = this.playerOrders[team.id].shift();
 				if (!player) {
 					this.setTeamPlayerOrder(team);
-					player = this.playerOrders[team.id].shift()!;
+					player = this.playerOrders[team.id].shift();
 				}
-				this.currentPlayers[team.id] = player;
+				this.currentPlayers[team.id] = player!;
 			}
 		}
 
@@ -172,7 +172,6 @@ class Team {
 
 const commandDefinitions: GameCommandDefinitions<TeamThis> = {
 	guess: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user, cmd, timestamp): GameCommandReturnType {
 			if (this.answerCommands && !this.answerCommands.includes(cmd)) return false;
 			if (!this.canGuessAnswer(this.players[user.id])) return false;
@@ -242,7 +241,6 @@ const tests: GameFileTests<TeamThis> = {
 			async: true,
 			commands: [['guess'], ['g']],
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game, format, attributes): Promise<void> {
 			this.timeout(15000);
 

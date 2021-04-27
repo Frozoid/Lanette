@@ -8,8 +8,6 @@ type AchievementNames = "drawwizard" | "luckofthedraw";
 type ActionCardNames = 'greninja' | 'kecleon' | 'magnemite' | 'doduo' | 'machamp' | 'inkay' | 'slaking' | 'spinda';
 type ActionCardsType = KeyedDict<ActionCardNames, IActionCardData<BulbasaursUno>>;
 
-const types: Dict<string> = {};
-
 const drawWizardAmount = 6;
 
 class BulbasaursUno extends CardMatching<ActionCardsType> {
@@ -28,9 +26,10 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 				return game.pokemonToActionCard(this);
 			},
 			getRandomTarget(game) {
-				let targets: string[] = [Dex.getExistingType(game.sampleOne(Dex.data.typeKeys)).name];
+				const typeKeys = Dex.getData().typeKeys;
+				let targets: string[] = [Dex.getExistingType(game.sampleOne(typeKeys)).name];
 				while (!this.isPlayableTarget(game, targets)) {
-					targets = [Dex.getExistingType(game.sampleOne(Dex.data.typeKeys)).name];
+					targets = [Dex.getExistingType(game.sampleOne(typeKeys)).name];
 				}
 
 				return this.name + ", " + targets[0];
@@ -50,13 +49,13 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 					return false;
 				}
 
-				if (!(type in types)) {
+				if (!(type in game.usableTypes)) {
 					if (player) player.say(CommandParser.getErrorText(['invalidType', targets[0]]));
 					return false;
 				}
 
-				if (game.topCard.types.length === 1 && types[type] === game.topCard.types[0]) {
-					if (player) player.say("The top card is already " + types[type] + " type.");
+				if (game.topCard.types.length === 1 && game.usableTypes[type] === game.topCard.types[0]) {
+					if (player) player.say("The top card is already " + game.usableTypes[type] + " type.");
 					return false;
 				}
 
@@ -71,9 +70,10 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 				return game.pokemonToActionCard(this);
 			},
 			getRandomTarget(game) {
-				let targets: string[] = [Dex.data.colors[game.sampleOne(Object.keys(Dex.data.colors))]];
+				const colors = Dex.getData().colors;
+				let targets: string[] = [colors[game.sampleOne(Object.keys(colors))]];
 				while (!this.isPlayableTarget(game, targets)) {
-					targets = [Dex.data.colors[game.sampleOne(Object.keys(Dex.data.colors))]];
+					targets = [colors[game.sampleOne(Object.keys(colors))]];
 				}
 
 				return this.name + ", " + targets[0];
@@ -93,13 +93,14 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 					return false;
 				}
 
-				if (!(color in Dex.data.colors)) {
+				const colors = Dex.getData().colors;
+				if (!(color in colors)) {
 					if (player) player.say("'" + targets[0].trim() + "' is not a valid color.");
 					return false;
 				}
 
-				if (game.topCard.color === Dex.data.colors[color]) {
-					if (player) player.say("The top card is already " + Dex.data.colors[color] + ".");
+				if (game.topCard.color === colors[color]) {
+					if (player) player.say("The top card is already " + colors[color] + ".");
 					return false;
 				}
 
@@ -290,13 +291,17 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 	skippedPlayerAchievement = BulbasaursUno.achievements.drawwizard;
 	skippedPlayerAchievementAmount = drawWizardAmount;
 	typesLimit: number = 20;
+	usableTypes: Dict<string> = {};
 	usesColors: boolean = true;
 
-	static loadData(): void {
-		for (const key of Dex.data.typeKeys) {
-			const type = Dex.getExistingType(key);
-			types[type.id] = type.name;
-			types[type.id + 'type'] = type.name;
+	onSignups(): void {
+		super.onSignups();
+
+		const dex = this.getDex();
+		for (const key of dex.getData().typeKeys) {
+			const type = dex.getExistingType(key);
+			this.usableTypes[type.id] = type.name;
+			this.usableTypes[type.id + 'type'] = type.name;
 		}
 	}
 
@@ -332,8 +337,8 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 			drawCards = 0;
 		} else if (id === 'greninja') {
 			const type = Tools.toId(targets[0]);
-			this.topCard.types = [types[type]];
-			cardDetail = types[type];
+			this.topCard.types = [this.usableTypes[type]];
+			cardDetail = this.usableTypes[type];
 		} else if (id === 'kecleon') {
 			const color = Tools.toId(targets[0]);
 			this.topCard.color = this.colors[color];
@@ -420,7 +425,6 @@ class BulbasaursUno extends CardMatching<ActionCardsType> {
 
 const commands: GameCommandDefinitions<BulbasaursUno> = {
 	draw: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canPlay || this.players[user.id].frozen || this.currentPlayer !== this.players[user.id]) return false;
 			this.awaitingCurrentPlayerCard = false;
@@ -560,4 +564,54 @@ export const game: IGameFile<BulbasaursUno> = Games.copyTemplateProperties(cardG
 	mascot: "Bulbasaur",
 	scriptedOnly: true,
 	tests: Object.assign({}, cardGame.tests, tests),
+	variants: [
+		{
+			name: "Bulbasaur's Kanto Uno",
+			variantAliases: ["kanto", "gen1"],
+			requiredGen: 1,
+			maxPlayers: 20,
+		},
+		{
+			name: "Bulbasaur's Johto Uno",
+			variantAliases: ["johto", "gen2"],
+			requiredGen: 2,
+			maxPlayers: 16,
+		},
+		{
+			name: "Bulbasaur's Hoenn Uno",
+			variantAliases: ["hoenn", "gen3"],
+			requiredGen: 3,
+			maxPlayers: 20,
+		},
+		{
+			name: "Bulbasaur's Sinnoh Uno",
+			variantAliases: ["sinnoh", "gen4"],
+			requiredGen: 4,
+			maxPlayers: 19,
+		},
+		{
+			name: "Bulbasaur's Unova Uno",
+			variantAliases: ["unova", "gen5"],
+			requiredGen: 5,
+			maxPlayers: 20,
+		},
+		{
+			name: "Bulbasaur's Kalos Uno",
+			variantAliases: ["kalos", "gen6"],
+			requiredGen: 6,
+			maxPlayers: 14,
+		},
+		{
+			name: "Bulbasaur's Alola Uno",
+			variantAliases: ["alola", "gen7"],
+			requiredGen: 7,
+			maxPlayers: 19,
+		},
+		{
+			name: "Bulbasaur's Galar Uno",
+			variantAliases: ["galar", "gen8"],
+			requiredGen: 8,
+			maxPlayers: 18,
+		},
+	],
 });

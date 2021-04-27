@@ -3,8 +3,6 @@ import type { BaseCommandDefinitions } from "../types/command-parser";
 import type { IBattleGameData } from "../types/games";
 import type { IFormat } from "../types/pokemon-showdown";
 
-/* eslint-disable @typescript-eslint/explicit-module-boundary-types */
-
 export const commands: BaseCommandDefinitions = {
 	tournament: {
 		command(target, room, user) {
@@ -64,7 +62,7 @@ export const commands: BaseCommandDefinitions = {
 			if (Config.defaultTournamentPlayerCaps && room.id in Config.defaultTournamentPlayerCaps) {
 				playerCap = Config.defaultTournamentPlayerCaps[room.id];
 			}
-			this.sayCommand("/tour new " + format.name + ", elimination" + (playerCap ? ", " + playerCap : ""));
+			room.createTournament(format, playerCap);
 		},
 		aliases: ['createtour', 'ct'],
 	},
@@ -79,7 +77,7 @@ export const commands: BaseCommandDefinitions = {
 			}
 			room.tournament.adjustCap(cap);
 		},
-		aliases: ['tcap'],
+		aliases: ['tourcap', 'tcap'],
 	},
 	tournamentenablepoints: {
 		command(target, room, user, cmd) {
@@ -215,7 +213,7 @@ export const commands: BaseCommandDefinitions = {
 			if (isNaN(month)) return this.say("You must specify the month (1-12).");
 			const schedule = Tournaments.getTournamentScheduleHtml(tournamentRoom, month);
 			if (!schedule) return this.say("No tournament schedule found for " + tournamentRoom.title + ".");
-			this.sayCommand("!code " + schedule);
+			this.sayCode(schedule);
 		},
 		aliases: ['gettourschedule'],
 	},
@@ -243,8 +241,9 @@ export const commands: BaseCommandDefinitions = {
 			}
 
 			const targets = target.split(',');
-			const formatName = targets[0];
-			const id = Tools.toId(formatName);
+			let tournamentName: string | undefined;
+			let formatName = targets[0];
+			let id = Tools.toId(formatName);
 			targets.shift();
 
 			const samePokemon: string[] = [];
@@ -300,6 +299,14 @@ export const commands: BaseCommandDefinitions = {
 					}
 				} else {
 					format = Dex.getFormat(formatName);
+					if (!format && targets.length) {
+						tournamentName = formatName;
+						formatName = targets[0];
+						id = Tools.toId(formatName);
+						targets.shift();
+
+						format = Dex.getFormat(formatName);
+					}
 				}
 
 				if (!format || !format.tournamentPlayable) {
@@ -382,12 +389,13 @@ export const commands: BaseCommandDefinitions = {
 				playerCap,
 				scheduled,
 				time,
+				tournamentName,
 			};
 
 			if (scheduled) {
 				Tournaments.setScheduledTournamentTimer(room);
 			} else if (time) {
-				Tournaments.setTournamentTimer(room, time, format, playerCap);
+				Tournaments.setTournamentTimer(room, time, format, playerCap, false, tournamentName);
 			}
 			this.run('queuedtournament', '');
 
@@ -428,8 +436,15 @@ export const commands: BaseCommandDefinitions = {
 				return this.say(errorText);
 			}
 
+			let tournamentName: string;
+			if (database.queuedTournament.tournamentName) {
+				tournamentName = database.queuedTournament.tournamentName + " (" + format.name + ")";
+			} else {
+				tournamentName = Dex.getCustomFormatName(format);
+			}
+
 			let html = "<div class='infobox infobox-limited'><b>Queued" + (this.pm ? " " + tournamentRoom.title : "") + " " +
-				"tournament</b>: " + Dex.getCustomFormatName(format) + (database.queuedTournament.scheduled ? " <i>(scheduled)</i>" : "") +
+				"tournament</b>: " + tournamentName + (database.queuedTournament.scheduled ? " <i>(scheduled)</i>" : "") +
 				"<br />";
 			if (database.queuedTournament.time) {
 				const now = Date.now();
@@ -721,5 +736,3 @@ export const commands: BaseCommandDefinitions = {
 		aliases: ['viewuserhostedtours'],
 	},
 };
-
-/* eslint-enable */

@@ -22,7 +22,7 @@ class InkaysCups extends ScriptedGame {
 	usesWorkers: boolean = true;
 
 	static loadData(): void {
-		const parametersData = Games.workers.parameters.getData();
+		const parametersData = Games.getWorkers().parameters.getData();
 
 		for (const searchType of searchTypes) {
 			paramTypeDexesKeys[searchType] = {};
@@ -64,6 +64,7 @@ class InkaysCups extends ScriptedGame {
 	}
 
 	generateCups(): void {
+		const workers = Games.getWorkers();
 		const roundParamTypes = this.sampleMany(paramTypes, 2);
 		const lower = this.format.options.freejoin ? 5 : this.getRemainingPlayerCount();
 		const upper = lower * 3;
@@ -76,10 +77,10 @@ class InkaysCups extends ScriptedGame {
 			attempts++;
 			for (const paramType of roundParamTypes) {
 				const name = this.sampleOne(paramTypeDexesKeys.pokemon[genString][paramType]);
-				params.push(Games.workers.parameters.getData().pokemon.gens[genString].paramTypePools[paramType][Tools.toId(name)]);
+				params.push(workers.parameters.getData().pokemon.gens[genString].paramTypePools[paramType][Tools.toId(name)]);
 			}
 
-			const intersection = Games.workers.parameters.intersect({
+			const intersection = workers.parameters.intersect({
 				mod: genString,
 				params,
 				paramTypes,
@@ -114,6 +115,7 @@ class InkaysCups extends ScriptedGame {
 		const text = "Grab a Pokemon that fits the parameters: **" + Tools.joinList(paramNames) + "**!";
 		this.on(text, () => {
 			this.canGrab = true;
+			if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint(Tools.joinList(paramNames), this.answers, true);
 			if (this.timeout) clearTimeout(this.timeout);
 			this.timeout = setTimeout(() => this.nextRound(), this.roundTime);
 		});
@@ -162,11 +164,22 @@ class InkaysCups extends ScriptedGame {
 		if (!givenAnswer) givenAnswer = Dex.getExistingPokemon(this.answers[0]).name;
 		return "A possible answer was __" + givenAnswer + "__.";
 	}
+
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			const command = "grab";
+			const answer = this.sampleOne(this.answers).toLowerCase();
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
 }
 
 const commands: GameCommandDefinitions<InkaysCups> = {
 	grab: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canGrab || this.roundGuesses.has(this.players[user.id])) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -184,6 +197,8 @@ const commands: GameCommandDefinitions<InkaysCups> = {
 				}
 			}
 			if (answerIndex === -1) return false;
+
+			if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
 
 			const answer = Dex.getExistingPokemon(this.answers[answerIndex]).name;
 			if (this.format.options.freejoin) {
@@ -216,7 +231,12 @@ const commands: GameCommandDefinitions<InkaysCups> = {
 
 export const game: IGameFile<InkaysCups> = {
 	aliases: ['inkays', 'cups'],
-	category: 'knowledge',
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+		requiredFreejoin: true,
+	},
+	category: 'knowledge-3',
 	class: InkaysCups,
 	commandDescriptions: [Config.commandCharacter + 'grab [Pokemon]'],
 	commands,

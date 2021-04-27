@@ -67,6 +67,7 @@ export class Tournament extends Activity {
 		this.id = format.id;
 		this.uhtmlBaseName = 'tournament-' + this.id;
 
+		if (name) this.manuallyNamed = true;
 		this.setGenerator(generator);
 	}
 
@@ -86,7 +87,7 @@ export class Tournament extends Activity {
 	setCustomFormatName(): void {
 		const previousName = this.name;
 		this.name = Dex.getCustomFormatName(this.format);
-		if (this.name !== previousName) this.sayCommand("/tour name " + this.name);
+		if (this.name !== previousName) this.room.nameTournament(this.name);
 	}
 
 	canAwardPoints(): boolean {
@@ -115,7 +116,7 @@ export class Tournament extends Activity {
 	adjustCap(cap?: number): void {
 		if (!cap) {
 			if (this.playerCount % 8 === 0) {
-				this.sayCommand("/tour start");
+				this.room.startTournament();
 				return;
 			}
 
@@ -130,8 +131,8 @@ export class Tournament extends Activity {
 
 		if (this.adjustCapTimer) clearTimeout(this.adjustCapTimer);
 
-		this.sayCommand("/tour cap " + cap);
-		if (!this.playerCap) this.sayCommand("/tour autostart on");
+		this.room.setTournamentCap(cap);
+		if (!this.playerCap) this.room.autoStartTournament();
 		this.say("The tournament's player cap is now **" + cap + "**.");
 	}
 
@@ -186,7 +187,7 @@ export class Tournament extends Activity {
 			if (semiFinalists.length) {
 				text.unshift("semi-finalist" + (semiFinalists.length > 1 ? "s" : "") + " " + Tools.joinList(semiFinalists, '**'));
 			}
-			this.sayCommand('/wall Congratulations to ' + Tools.joinList(text));
+			this.room.announce('Congratulations to ' + Tools.joinList(text));
 		} else {
 			const multiplier = Tournaments.getCombinedPointMultiplier(this.format, this.totalPlayers, this.scheduled);
 			const semiFinalistPoints = Tournaments.getSemiFinalistPoints(multiplier);
@@ -260,7 +261,8 @@ export class Tournament extends Activity {
 				if (format.name === this.originalFormat) this.manuallyNamed = false;
 			} else {
 				this.name = this.updates.format;
-				if (this.name !== (this.format.name + Dex.defaultCustomRulesName) && this.name !== Dex.getCustomFormatName(this.format)) {
+				if (this.name !== (this.format.name + Dex.getDefaultCustomRulesName()) &&
+					this.name !== Dex.getCustomFormatName(this.format)) {
 					this.manuallyNamed = true;
 				}
 			}
@@ -349,7 +351,7 @@ export class Tournament extends Activity {
 		this.battleRooms.push(room.publicId);
 
 		if (this.generator === 1 && this.totalPlayers >= 4 && this.getRemainingPlayerCount() === 2) {
-			this.sayCommand("/wall Final battle of the " + this.name + " " + this.activityType + ": <<" + room.id + ">>!");
+			this.room.announce("Final battle of the " + this.name + " " + this.activityType + ": <<" + room.id + ">>!");
 		}
 
 		if (this.joinBattles) {

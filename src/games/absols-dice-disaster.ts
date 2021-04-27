@@ -37,7 +37,7 @@ class AbsolsDiceDisaster extends ScriptedGame {
 		const uhtmlName = this.uhtmlBaseName + '-round';
 		const html = this.getRoundHtml(players => this.getPlayerNames(players));
 		this.onUhtml(uhtmlName, html, () => {
-			this.roundDiceRoll = Math.floor(Math.random() * senseRolls.fortune) + 1;
+			this.roundDiceRoll = this.random(senseRolls.fortune) + 1;
 			let absolSenseText: string = "Absol senses ";
 			if (this.roundDiceRoll <= senseRolls.disaster) {
 				this.absolSense = 'disaster';
@@ -108,7 +108,6 @@ class AbsolsDiceDisaster extends ScriptedGame {
 
 const commands: GameCommandDefinitions<AbsolsDiceDisaster> = {
 	bid: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canBid) return false;
 			const bid = parseInt(target);
@@ -130,7 +129,7 @@ const commands: GameCommandDefinitions<AbsolsDiceDisaster> = {
 };
 
 export const game: IGameFile<AbsolsDiceDisaster> = {
-	aliases: ['absols', 'dicedisaster', 'ddice', 'dd'],
+	aliases: ['absols', 'dicedisaster', 'ddice', 'add'],
 	category: 'luck',
 	class: AbsolsDiceDisaster,
 	commandDescriptions: [Config.commandCharacter + "bid [number]"],

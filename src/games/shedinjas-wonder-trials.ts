@@ -137,7 +137,7 @@ class ShedinjasWonderTrials extends ScriptedGame {
 			const player = this.players[i];
 			const points = this.points.get(player);
 			if (points && points >= this.maxPoints) {
-				this.winners.set(player, 1);
+				this.winners.set(player, points);
 				this.addBits(player, 500);
 				if (this.firstMove === player) this.unlockAchievement(player, ShedinjasWonderTrials.achievements.wonderguardwarrior);
 			}
@@ -149,7 +149,6 @@ class ShedinjasWonderTrials extends ScriptedGame {
 
 const commands: GameCommandDefinitions<ShedinjasWonderTrials> = {
 	use: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canUseMove || !this.currentPokemon) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -223,7 +222,7 @@ const commands: GameCommandDefinitions<ShedinjasWonderTrials> = {
 
 export const game: IGameFile<ShedinjasWonderTrials> = {
 	aliases: ["shedinjas", "swt", "wondertrials"],
-	category: 'knowledge',
+	category: 'knowledge-1',
 	commandDescriptions: [Config.commandCharacter + "use [move]"],
 	commands,
 	class: ShedinjasWonderTrials,

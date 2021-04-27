@@ -8,6 +8,7 @@ const data: {stats: Dict<string[]>} = {
 const statsKeys: string[] = [];
 
 class ChimechosStatSchool extends QuestionAndAnswer {
+	oneGuessPerHint = true;
 	readonly roundGuesses = new Map<Player, boolean>();
 
 	static loadData(): void {
@@ -34,7 +35,7 @@ class ChimechosStatSchool extends QuestionAndAnswer {
 
 export const game: IGameFile<ChimechosStatSchool> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ['chimechos', 'css', 'statschool'],
-	category: 'knowledge',
+	category: 'knowledge-3',
 	class: ChimechosStatSchool,
 	defaultOptions: ['points'],
 	description: "Players guess Pokemon with the given base stat distributions!",

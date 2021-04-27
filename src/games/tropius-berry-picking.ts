@@ -94,7 +94,7 @@ class TropiusBerryPicking extends ScriptedGame {
 
 	static loadData(): void {
 		const types: string[] = [];
-		for (const key of Dex.data.typeKeys) {
+		for (const key of Dex.getData().typeKeys) {
 			types.push(Dex.getExistingType(key).name);
 		}
 
@@ -207,11 +207,12 @@ class TropiusBerryPicking extends ScriptedGame {
 
 		this.on(smeargleText, () => {
 			this.canEat = true;
+			if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint(smeargleText, [], true);
 			this.timeout = setTimeout(() => this.nextRound(), this.roundTime);
 		});
 
 		if (this.format.options.freejoin) {
-			this.timeout = setTimeout(() => this.say(smeargleText), 5000);
+			this.say(smeargleText);
 		} else {
 			const html = this.getRoundHtml(players => this.getPlayerNames(players));
 			const uhtmlName = this.uhtmlBaseName + '-round-html';
@@ -240,11 +241,30 @@ class TropiusBerryPicking extends ScriptedGame {
 
 		this.announceWinners();
 	}
+
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			let answer = '';
+			const keys = this.shuffle(Object.keys(berries));
+			for (const key of keys) {
+				if (berries[key].effect === this.roundEffect.effect) {
+					answer = berries[key].name.toLowerCase();
+					break;
+				}
+			}
+
+			const command = "eat";
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
 }
 
 const commands: GameCommandDefinitions<TropiusBerryPicking> = {
 	eat: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canEat) return false;
 			const player = this.createPlayer(user) || this.players[user.id];
@@ -253,7 +273,10 @@ const commands: GameCommandDefinitions<TropiusBerryPicking> = {
 			if (!berry) return false;
 			if (this.format.options.freejoin) {
 				if (berry.effect !== this.roundEffect.effect) return false;
+
+				if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
 				if (this.timeout) clearTimeout(this.timeout);
+
 				this.canEat = false;
 				let points = this.points.get(player) || 0;
 				points += 1;
@@ -261,12 +284,12 @@ const commands: GameCommandDefinitions<TropiusBerryPicking> = {
 				this.say('**' + player.name + '** advances to **' + points + '** point' + (points > 1 ? 's' : '') + '! A possible ' +
 					'answer was __' + berry.name + '__.');
 				if (points === this.format.options.points) {
-					this.winners.set(player, 1);
+					this.winners.set(player, points);
 					this.end();
 					return true;
 				}
 				this.roundEffect = noEffect;
-				this.nextRound();
+				this.timeout = setTimeout(() => this.nextRound(), 5000);
 			} else {
 				if (this.roundBerries.has(player)) return false;
 				this.roundBerries.set(player, berry);
@@ -279,7 +302,12 @@ const commands: GameCommandDefinitions<TropiusBerryPicking> = {
 
 export const game: IGameFile<TropiusBerryPicking> = {
 	aliases: ["tropius", "berrypicking", "berries", "tbp"],
-	category: 'knowledge',
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+		requiredFreejoin: true,
+	},
+	category: 'knowledge-2',
 	commandDescriptions: [Config.commandCharacter + "eat [berry]"],
 	commands,
 	class: TropiusBerryPicking,

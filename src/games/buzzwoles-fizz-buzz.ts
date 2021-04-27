@@ -25,7 +25,7 @@ class BuzzwolesFizzBuzz extends ScriptedGame {
 	expectedMultiples: {'firstMultiple': string[]; 'secondMultiple': string[]} = {firstMultiple: [], secondMultiple: []};
 
 	static loadData(): void {
-		for (const key of Dex.data.typeKeys) {
+		for (const key of Dex.getData().typeKeys) {
 			data.categories.push(Dex.getExistingType(key).name + " type Pokemon");
 		}
 
@@ -167,7 +167,6 @@ class BuzzwolesFizzBuzz extends ScriptedGame {
 
 const commands: GameCommandDefinitions<BuzzwolesFizzBuzz> = {
 	fizz: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.currentPlayer || this.players[user.id] !== this.currentPlayer) return false;
 			if (this.timeout) clearTimeout(this.timeout);
@@ -299,7 +298,7 @@ const commands: GameCommandDefinitions<BuzzwolesFizzBuzz> = {
 				}
 			} else {
 				this.say(user.name + " was eliminated from the game!");
-				this.eliminatePlayer(this.currentPlayer, "You gave an incorrect multiple or item!");
+				this.eliminatePlayer(this.currentPlayer);
 				this.currentPlayer = null;
 				if (this.getRemainingPlayerCount() < 2) {
 					this.end();
@@ -315,7 +314,7 @@ const commands: GameCommandDefinitions<BuzzwolesFizzBuzz> = {
 
 export const game: IGameFile<BuzzwolesFizzBuzz> = {
 	aliases: ['buzzwoles', 'qb'],
-	category: 'knowledge',
+	category: 'knowledge-3',
 	class: BuzzwolesFizzBuzz,
 	commandDescriptions: [Config.commandCharacter + "fizz [number or item]"],
 	commands,

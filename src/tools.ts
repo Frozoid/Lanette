@@ -5,8 +5,11 @@ import url = require('url');
 
 import type { PRNG } from './lib/prng';
 import { eggGroupHexCodes, hexCodes, namedHexCodes, pokemonColorHexCodes, typeHexCodes } from './tools-hex-codes';
-import type { IExtractedBattleId, IHexCodeData, IParsedSmogonLink, NamedHexCode } from './types/tools';
+import type { IExtractedBattleId, IHexCodeData, IParsedSmogonLink, NamedHexCode, TimeZone } from './types/tools';
 import type { IParam, IParametersGenData, ParametersSearchType } from './workers/parameters';
+
+const TABLE_PADDING_SIZE = 2;
+const TABLE_TEXT_SIZE = 18;
 
 const ALPHA_NUMERIC_REGEX = /[^a-zA-Z0-9 ]/g;
 const ID_REGEX = /[^a-z0-9]/g;
@@ -15,7 +18,7 @@ const INTEGER_REGEX = /^[0-9]+$/g;
 const FLOAT_REGEX = /^[.0-9]+$/g;
 const SPACE_REGEX = /\s/g;
 const APOSTROPHE_REGEX = /[/']/g;
-const HTML_CHARACTER_REGEX = /[<>/'"]/g;
+const HTML_CHARACTER_REGEX = /[<>/\\'"]/g;
 const UNSAFE_API_CHARACTER_REGEX = /[^A-Za-z0-9 ,.%&'"!?()[\]`_<>/|:;=+-@]/g;
 
 const BATTLE_ROOM_PREFIX = 'battle-';
@@ -43,6 +46,9 @@ export class Tools {
 	readonly mainServer: string = 'play.pokemonshowdown.com';
 	readonly maxMessageLength: typeof maxMessageLength = maxMessageLength;
 	readonly maxUsernameLength: typeof maxUsernameLength = maxUsernameLength;
+	readonly minRoomHeight: number = 500;
+	readonly minRoomWidth: number = 350;
+	readonly namedHexCodes: typeof namedHexCodes = namedHexCodes;
 	readonly pokemonColorHexCodes: typeof pokemonColorHexCodes = pokemonColorHexCodes;
 	readonly pokemonShowdownFolder: string = path.join(rootFolder, 'pokemon-showdown');
 	readonly rootFolder: typeof rootFolder = rootFolder;
@@ -50,6 +56,12 @@ export class Tools {
 	readonly smogonPostPermalinkPrefix: string = SMOGON_POST_PERMALINK_PREFIX;
 	readonly smogonPostsPrefix: string = SMOGON_POSTS_PREFIX;
 	readonly smogonThreadsPrefix: string = SMOGON_THREADS_PREFIX;
+	readonly timezones: TimeZone[] = ['GMT-12:00', 'GMT-11:00', 'GMT-10:00', 'GMT-09:30', 'GMT-09:00', 'GMT-08:00', 'GMT-07:00',
+		'GMT-06:00', 'GMT-05:00', 'GMT-04:00', 'GMT-03:30', 'GMT-03:00', 'GMT-02:00', 'GMT-01:00', 'GMT+00:00', 'GMT+01:00', 'GMT+02:00',
+		'GMT+03:00', 'GMT+03:30', 'GMT+04:00', 'GMT+04:30', 'GMT+05:00', 'GMT+05:30', 'GMT+05:45', 'GMT+06:00', 'GMT+06:30', 'GMT+07:00',
+		'GMT+08:00', 'GMT+08:45', 'GMT+09:00', 'GMT+09:30', 'GMT+10:00', 'GMT+10:30', 'GMT+11:00', 'GMT+12:00', 'GMT+12:45', 'GMT+13:00',
+		'GMT+14:00',
+	];
 	readonly typeHexCodes: typeof typeHexCodes = typeHexCodes;
 	readonly unsafeApiCharacterRegex: RegExp = UNSAFE_API_CHARACTER_REGEX;
 
@@ -64,19 +76,46 @@ export class Tools {
 		}
 	}
 
-	getNamedHexCode(name: NamedHexCode): IHexCodeData {
-		return hexCodes[namedHexCodes[name]];
+	getMaxTableWidth(borderSpacing: number): number {
+		return this.minRoomWidth - (borderSpacing * 2);
 	}
 
-	getEggGroupHexCode(eggGroup: string): IHexCodeData {
+	getMaxTableHeight(borderSpacing: number): number {
+		return this.minRoomHeight - (borderSpacing * 2);
+	}
+
+	getTableCellAdditionalWidth(borderSpacing: number): number {
+		return (borderSpacing * 2) + TABLE_PADDING_SIZE;
+	}
+
+	getTableCellAdditionalHeight(borderSpacing: number, cellText?: boolean): number {
+		let additionalHeight = (borderSpacing * 2) + TABLE_PADDING_SIZE;
+		if (cellText) additionalHeight += TABLE_TEXT_SIZE;
+
+		return additionalHeight;
+	}
+
+	getMaxTableCellWidth(maxTableWidth: number, borderSpacing: number, cellsPerRow: number): number {
+		return Math.floor((maxTableWidth - (this.getTableCellAdditionalWidth(borderSpacing) * cellsPerRow)) / cellsPerRow);
+	}
+
+	getMaxTableCellHeight(maxTableHeight: number, borderSpacing: number, rowsInTable: number, cellText?: boolean): number {
+		return Math.floor((maxTableHeight - (this.getTableCellAdditionalHeight(borderSpacing, cellText) * rowsInTable)) / rowsInTable);
+	}
+
+	getNamedHexCode(name: NamedHexCode): IHexCodeData {
+		return hexCodes[namedHexCodes[name]]!;
+	}
+
+	getEggGroupHexCode(eggGroup: string): IHexCodeData | undefined {
 		return hexCodes[eggGroupHexCodes[eggGroup]];
 	}
 
-	getPokemonColorHexCode(color: string): IHexCodeData {
+	getPokemonColorHexCode(color: string): IHexCodeData | undefined {
 		return hexCodes[pokemonColorHexCodes[color]];
 	}
 
-	getTypeHexCode(type: string): IHexCodeData {
+	getTypeHexCode(type: string): IHexCodeData | undefined {
 		return hexCodes[typeHexCodes[type]];
 	}
 
@@ -227,9 +266,9 @@ export class Tools {
 	intersectParams(paramsType: ParametersSearchType, params: IParam[], parametersData: DeepImmutableObject<IParametersGenData>): string[] {
 		let tierSearch = false;
 		for (const param of params) {
-			if (param.type === 'tier') {
+			if (!(param.type in parametersData.paramTypeDexes) || !(param.param in parametersData.paramTypeDexes[param.type])) return [];
+			if (!tierSearch && param.type === 'tier') {
 				tierSearch = true;
-				break;
 			}
 		}
 
@@ -324,6 +363,18 @@ export class Tools {
 			.replace(SPACE_REGEX, "-") + ")";
 	}
 
+	escapeHTML(input: string): string {
+		if (!input) return '';
+		return input
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, "&apos;")
+			.replace(/\//g, '&#x2f;')
+			.replace(/\\/g, '&#92;');
+	}
+
 	unescapeHTML(input: string): string {
 		if (!input) return '';
 		return input
@@ -337,7 +388,7 @@ export class Tools {
 	}
 
 	stripHtmlCharacters(input: string): string {
-		return input.replace(HTML_CHARACTER_REGEX, '');
+		return input.replace(HTML_CHARACTER_REGEX, '').trim();
 	}
 
 	joinList(list: readonly string[], preFormatting?: string | null, postFormatting?: string | null, conjunction?: string): string {
@@ -381,12 +432,17 @@ export class Tools {
 		return parts.slice(0, 3).join("-") + " " + parts.slice(3, human ? 5 : 6).join(":") + (human ? "" + parts[6] : "");
 	}
 
-	toDurationString(input: number, options?: {precision?: number; hhmmss?: boolean}): string {
+	toDurationString(input: number, options?: {precision?: number; hhmmss?: boolean, milliseconds?: boolean}): string {
 		const date = new Date(input);
 		const parts = [date.getUTCFullYear() - 1970, date.getUTCMonth(), date.getUTCDate() - 1, date.getUTCHours(), date.getUTCMinutes(),
 			date.getUTCSeconds()];
 		const roundingBoundaries = [6, 15, 12, 30, 30];
 		const unitNames = ["year", "month", "day", "hour", "minute", "second"];
+		if (options && options.milliseconds) {
+			parts.push(date.getUTCMilliseconds());
+			roundingBoundaries.push(500);
+			unitNames.push("millisecond");
+		}
 		const positiveIndex = parts.findIndex(elem => elem > 0);
 		const precision = options && options.precision ? options.precision : parts.length;
 		if (options && options.hhmmss) {

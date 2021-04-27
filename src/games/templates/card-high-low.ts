@@ -1,7 +1,8 @@
 import type { Player } from '../../room-activity';
-import type { GameCategory, GameCommandDefinitions, IGameTemplateFile } from '../../types/games';
+import type { GameCommandDefinitions, IGameTemplateFile } from '../../types/games';
 import type { ICard } from './card';
 import { Card, game as cardGame } from './card';
+import type { IPokemon } from '../../types/pokemon-showdown';
 
 export abstract class CardHighLow extends Card {
 	abstract categoryAbbreviations: Dict<string>;
@@ -21,6 +22,15 @@ export abstract class CardHighLow extends Card {
 	roundTimes: number[] = [15000, 16000, 17000, 18000, 19000, 20000, 21000, 22000, 23000, 24000, 25000];
 
 	abstract getCardDetail(card: ICard, detail: string): number;
+
+	filterForme(forme: IPokemon): boolean {
+		const baseSpecies = Dex.getExistingPokemon(forme.baseSpecies);
+		if (forme.isMega || forme.isPrimal ||
+			(baseSpecies.name === 'Calyrex' || baseSpecies.name === 'Deoxys' || baseSpecies.name === 'Kyurem' ||
+			baseSpecies.name === 'Necrozma' || baseSpecies.name === 'Zacian' || baseSpecies.name === 'Zamazenta' ||
+			baseSpecies.name === 'Zygarde')) return true;
+		return false;
+	}
 
 	createDeck(): void {
 		if (!this.deckPool.length) this.createDeckPool();
@@ -76,11 +86,12 @@ export abstract class CardHighLow extends Card {
 			bestDetail = sorted[0].detail;
 		}
 
+		const pokemonKeys = Dex.getData().pokemonKeys;
 		const cardsHtml: string[] = [];
 		for (const info of sorted) {
 			const card = info.card;
 			let cardHtml = '<div class="infobox" style="width:' + cardWidth + 'px">';
-			if (Dex.data.pokemonKeys.includes(card.id)) {
+			if (pokemonKeys.includes(card.id)) {
 				cardHtml += Dex.getPokemonIcon(Dex.getExistingPokemon(card.id));
 			}
 
@@ -240,7 +251,7 @@ export abstract class CardHighLow extends Card {
 			}
 			*/
 			this.addBits(player, this.bitsPerRound * points);
-			this.winners.set(player, 1);
+			this.winners.set(player, points);
 		}
 
 		this.announceWinners();
@@ -254,7 +265,6 @@ export abstract class CardHighLow extends Card {
 
 const commands: GameCommandDefinitions<CardHighLow> = {
 	play: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canPlay || this.roundPlays.has(this.players[user.id])) return false;
 			const player = this.players[user.id];
@@ -266,8 +276,8 @@ const commands: GameCommandDefinitions<CardHighLow> = {
 			if (!cards || !cards.length) return false;
 			const index = this.getCardIndex(id, cards);
 			if (index < 0) {
-				const pokemon = Dex.data.pokemonKeys.includes(id);
-				const move = Dex.data.moveKeys.includes(id);
+				const pokemon = Dex.getData().pokemonKeys.includes(id);
+				const move = Dex.getData().moveKeys.includes(id);
 				if (pokemon) {
 					user.say("You do not have [ " + Dex.getExistingPokemon(cardName).name + " ].");
 				} else if (move) {
@@ -289,7 +299,6 @@ const commands: GameCommandDefinitions<CardHighLow> = {
 };
 
 export const game: IGameTemplateFile<CardHighLow> = Object.assign(Tools.deepClone(cardGame), {
-	category: 'card-high-low' as GameCategory,
 	commands: Object.assign(Tools.deepClone(cardGame.commands), commands),
 	modeProperties: undefined,
 	tests: undefined,

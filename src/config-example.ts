@@ -1,6 +1,8 @@
+import type { Player } from "./room-activity";
+import type { Room } from "./rooms";
 import type { GroupName } from "./types/client";
 import type { IGameHostBoxPokemon, IGameTrainerCardPokemon } from "./types/config";
-import type { GameDifficulty } from "./types/games";
+import type { GameDifficulty, IGameFormat, IUserHostedFormat } from "./types/games";
 
 /* eslint-disable prefer-const*/
 
@@ -53,7 +55,7 @@ export let perMessageDeflate = false;
 /**
  * The base amount of time (in milliseconds) between connection attempts
  */
-export let reconnectTime = 60 * 1000;
+export let connectionAttemptTime = 60 * 1000;
 
 /**
  * A list of rooms to join after logging in
@@ -246,9 +248,9 @@ export let allowUserHostedGames: string[] = [];
 export let allowTournamentGames: string[] = [];
 
 /**
- * A list of rooms (roomids) where one vs. one challenges are allowed to be played
+ * A list of rooms (roomids) where challenges are allowed to be played
  */
-export let allowOneVsOneGames: string[] = [];
+export let allowChallengeGames: string[] = [];
 
 /**
  * A list of rooms (roomids) where game achievements are able to be unlocked
@@ -375,6 +377,11 @@ export let disallowCreatingPastGames: string[] = [];
 export let disallowCreatingPreviousUserHostedGame: string[] = [];
 
 /**
+ * A list of rooms (roomids) where the last scripted game cannot be the next user-hosted game
+ */
+export let disallowCreatingPreviousScriptedGame: string[] = [];
+
+/**
  * A list of rooms (roomids) where modes on the past games list cannot be used
  */
 export let limitGamesByMode: string[] = [];
@@ -398,5 +405,15 @@ export let githubApiCredentials: Dict<{token: string; username: string}> = {};
  * For each room in the object, the information for its game catalog gist
  */
 export let gameCatalogGists: Dict<{description: string; files: string[]; id: string}> = {};
+
+export let onScriptedGameWin: ((room: Room, format: IGameFormat, players: Dict<Player>, winners: Map<Player, number>,
+	points: Map<Player, number> | undefined) => void) | undefined = undefined;
+
+export let onUserHostedGameWin: ((room: Room, format: IUserHostedFormat, players: Dict<Player>, winners: Map<Player, number>,
+	points: Map<Player, number> | undefined) => void) | undefined = undefined;
+
+export let onUserHostedGameHost: ((room: Room, format: IUserHostedFormat, hostName: string) => void) | undefined = undefined;
+
+export let afd = false;
 
 /* eslint-enable */

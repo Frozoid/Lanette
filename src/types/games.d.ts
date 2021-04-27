@@ -1,3 +1,5 @@
+import type { IPokemonPick } from "../html-pages/components/pokemon-picker-base";
+import type { ITrainerPick } from "../html-pages/components/trainer-picker";
 import type { PRNGSeed } from "../lib/prng";
 import type { Player } from "../room-activity";
 import type { ScriptedGame } from "../room-game-scripted";
@@ -20,12 +22,12 @@ export type LoadedGameCommands<T extends ScriptedGame = ScriptedGame> = LoadedCo
 export type GameDifficulty = 'easy' | 'medium' | 'hard';
 export type AutoCreateTimerType = 'scripted' | 'tournament' | 'userhosted';
 
-export type GameCategory = 'board' | 'board-property' | 'card' | 'card-high-low' | 'card-matching' | 'chain' | 'elimination-tournament' |
-	'identification' | 'knowledge' | 'luck' | 'map' | 'puzzle' | 'reaction' | 'speed' | 'strategy' | 'visual';
+export type GameCategory = 'chain' | 'elimination-tournament' | 'identification-1' | 'identification-2' | 'knowledge-1' | 'knowledge-2' |
+	'knowledge-3' | 'luck' | 'map' | 'puzzle' | 'reaction' | 'speed' | 'tabletop';
 
 export type GameMode = 'group' | 'multianswer' | 'survival' | 'team' | 'timeattack';
 
-export type GameChallenge = 'onevsone';
+export type GameChallenge = 'botchallenge' | 'onevsone';
 
 export type GameAchievements = 'quickdraw' | 'captainwordmaster' | 'wordmaster' | 'knowitall' | 'captainknowitall' | 'fishoutofwater' |
 	'goldenmagikarp' | 'hightidesurvivor' | 'mazerunner' | 'kingofthecastle' | 'minesweeper' | 'voltorbsfuse' | 'litwicksflame' |
@@ -50,14 +52,7 @@ export interface IGameAchievement {
 	mode?: GameMode;
 }
 
-export interface IInternalGames {
-	eggtoss: string;
-	headtohead: string;
-	onevsone: string;
-	vote: string;
-}
-
-export type InternalGameKey = keyof IInternalGames;
+export type InternalGame = GameChallenge | 'eggtoss' | 'headtohead' | 'vote';
 
 interface IGameClass<T extends ScriptedGame = ScriptedGame> {
 	new(room: Room | User, pmRoom?: Room, initialSeed?: PRNGSeed): T;
@@ -112,8 +107,19 @@ export interface IGameCommandCountListener extends IGameCommandCountOptions {
 
 type IGameVariant<T extends ScriptedGame = ScriptedGame> = Partial<T> & IGameVariantProperties<T>;
 
+export type DisallowedChallenges = PartialKeyedDict<GameChallenge, boolean>;
+
+export interface IBotChallengeOptions {
+	enabled: boolean,
+	points?: number;
+	options?: string[];
+	requiredFreejoin?: boolean;
+	requiredOptions?: string[];
+}
+
 interface IGameFileProperties<T extends ScriptedGame = ScriptedGame> {
 	aliases?: string[];
+	botChallenge?: IBotChallengeOptions;
 	canGetRandomAnswer?: boolean;
 	category?: GameCategory;
 	challengePoints?: PartialKeyedDict<GameChallenge, number>;
@@ -122,6 +128,7 @@ interface IGameFileProperties<T extends ScriptedGame = ScriptedGame> {
 	customizableOptions?: Dict<IGameOptionValues>;
 	defaultOptions?: DefaultGameOption[];
 	disabled?: boolean;
+	disallowedChallenges?: DisallowedChallenges;
 	freejoin?: boolean;
 	/** Legacy names, such as from before game mascots were introduced; used for aliases */
 	formerNames?: string[];
@@ -133,7 +140,6 @@ interface IGameFileProperties<T extends ScriptedGame = ScriptedGame> {
 	minigameDescription?: string;
 	modeProperties?: PartialKeyedDict<GameMode, Partial<T>>;
 	modes?: GameMode[];
-	noOneVsOne?: boolean;
 	nonTrivialLoadData?: boolean;
 	scriptedOnly?: boolean;
 	tests?: GameFileTests<T>;
@@ -185,12 +191,13 @@ export interface IGameVariantProperties<T extends ScriptedGame = ScriptedGame> {
 	variantAliases: string[];
 
 	aliases?: string[];
+	botChallenge?: IBotChallengeOptions;
 	commandDescriptions?: string[];
 	customizableOptions?: Dict<IGameOptionValues>;
 	defaultOptions?: DefaultGameOption[];
 	description?: string;
+	disallowedChallenges?: DisallowedChallenges;
 	freejoin?: boolean;
-	noOneVsOne?: boolean;
 	modeProperties?: PartialKeyedDict<GameMode, Partial<T>>;
 	modes?: GameMode[];
 }
@@ -257,6 +264,15 @@ export interface IGameMode<T = ScriptedGame, U extends ScriptedGame = ScriptedGa
 export type PlayerList = Dict<Player> | readonly Player[] | Map<Player, any>;
 
 export type LoadedGameFile = DeepImmutable<IGameFormatData>;
+
+export interface IHostDisplayUhtml {
+	html: string;
+	pokemon: IPokemonPick[];
+	trainers: ITrainerPick[];
+	pokemonType: 'gif' | 'icon';
+	uhtmlName: string;
+	user: string;
+}
 
 export interface IPokemonUhtml {
 	pokemon: string[];

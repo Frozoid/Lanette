@@ -26,11 +26,12 @@ class MagcargosWeakSpot extends QuestionAndAnswer {
 	lastAnswers: string[] = [];
 	lastPokemon: string = '';
 	lastType: string = '';
+	oneGuessPerHint = true;
 	roundGuesses = new Map<Player, boolean>();
 
 	static loadData(): void {
 		const types: string[] = [];
-		for (const key of Dex.data.typeKeys) {
+		for (const key of Dex.getData().typeKeys) {
 			types.push(Dex.getExistingType(key).name);
 		}
 
@@ -100,7 +101,7 @@ class MagcargosWeakSpot extends QuestionAndAnswer {
 
 export const game: IGameFile<MagcargosWeakSpot> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ["Magcargos", "ws"],
-	category: 'knowledge',
+	category: 'knowledge-1',
 	class: MagcargosWeakSpot,
 	defaultOptions: ['points'],
 	description: "Players guess the weakness(es) that the given Pokemon share!",

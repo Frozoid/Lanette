@@ -23,6 +23,8 @@ class GrumpigsPokemath extends QuestionAndAnswer {
 	lastResult: number = 0;
 	roundTime = 30 * 1000;
 
+	roundOperands?: number;
+
 	static loadData(): void {
 		const pokedex = Games.getPokemonList();
 		for (const pokemon of pokedex) {
@@ -95,7 +97,9 @@ class GrumpigsPokemath extends QuestionAndAnswer {
 		this.lastOperation = operation;
 
 		let operandsCount: number;
-		if (this.format.inputOptions.operands) {
+		if (this.roundOperands) {
+			operandsCount = this.roundOperands;
+		} else if (this.format.inputOptions.operands) {
 			operandsCount = this.format.options.operands;
 		} else {
 			operandsCount = BASE_OPERANDS;
@@ -112,11 +116,14 @@ class GrumpigsPokemath extends QuestionAndAnswer {
 		this.hint = "<b>" + operandsAndResult.operands.map(x => data.pokemonByNumber[x][0]).join(" " + operationSymbols[operation] + " ") +
 			" = ?</b>";
 	}
+
+	increaseDifficulty(): void {
+		this.roundTime = Math.max(6000, this.roundTime - 1.5 * 1000);
+	}
 }
 
 const tests: GameFileTests<GrumpigsPokemath> = {
 	'should calculate results correctly': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			assertStrictEqual(game.calculateResult('add', [1, 2]), 3);
 			assertStrictEqual(game.calculateResult('add', [3, 4, 5]), 12);
@@ -132,7 +139,7 @@ const tests: GameFileTests<GrumpigsPokemath> = {
 
 export const game: IGameFile<GrumpigsPokemath> = Games.copyTemplateProperties(questionAndAnswerGame, {
 	aliases: ['grumpigs', 'pokemath'],
-	category: 'knowledge',
+	category: 'knowledge-3',
 	class: GrumpigsPokemath,
 	commandDescriptions: [Config.commandCharacter + "g [Pokemon]"],
 	customizableOptions: {
@@ -147,5 +154,11 @@ export const game: IGameFile<GrumpigsPokemath> = Games.copyTemplateProperties(qu
 	minigameDescription: "Use <code>" + Config.commandCharacter + "g</code> to guess the Pokemon whose dex number matches the answer to " +
 		"the math problem!",
 	modes: ["survival", "team"],
+	modeProperties: {
+		'survival': {
+			roundTime: 23.5 * 1000,
+			roundOperands: BASE_OPERANDS,
+		},
+	},
 	tests: Object.assign({}, questionAndAnswerGame.tests, tests),
 });

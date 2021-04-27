@@ -14,18 +14,38 @@ export interface IMessageParserFile {
 	priority: number;
 }
 
-export type IMessageTypes = 'command' | 'chat' | 'html' | 'uhtml' | 'pm' | 'pmhtml' | 'pmuhtml' | 'userdetails' | 'joinroom' | 'leaveroom';
-export interface IOutgoingMessage {
-	message: string;
-	type: IMessageTypes;
+export interface IServerProcessingMeasurement {
+	measurement: number;
+	timestamp: number;
+}
+
+export type IOutgoingMessageTypes = 'command' | 'chat' | 'chat-html' | 'chat-uhtml' | 'pm' | 'pm-html' | 'pm-uhtml' | 'code' | 'join-room' |
+	'leave-room' | 'modchat' | 'filters-view' | 'roominfo' | 'banword-list' | 'room-voice' | 'room-deauth' | 'warn' | 'hangman-start' |
+	'hangman-end' | 'htmlpage' | 'highlight-htmlpage' | 'announce' | 'notifyrank' | 'notifyoffrank' | 'modnote' | 'tournament-create' |
+	'tournament-start' | 'tournament-name' | 'tournament-autostart' | 'tournament-autodq' | 'tournament-cap' | 'tournament-rules' |
+	'tournament-forcepulic' | 'tournament-scouting' | 'tournament-modjoin';
+
+export interface IOutgoingMessageAttributes {
+	announcement?: string;
 	html?: string;
 	measure?: boolean;
+	modchatLevel?: string;
+	modnote?: string;
+	notifyId?: string;
+	notifyTitle?: string;
+	notifyMessage?: string;
+	pageId?: string;
 	roomid?: string;
-	sentTime?: number;
-	serverProcessingTime?: number;
 	text?: string;
 	uhtmlName?: string;
 	user?: string;
+	warnReason?: string;
+}
+
+export interface IOutgoingMessage extends IOutgoingMessageAttributes {
+	message: string;
+	type: IOutgoingMessageTypes;
+	sentTime?: number;
 }
 
 export type GroupName = 'locked' | 'muted' | 'regularuser' | 'prizewinner' | 'voice' | 'player' | 'bot' | 'driver' | 'moderator' | 'host' |
@@ -76,9 +96,9 @@ interface IRoomDetails {
 
 export interface IRoomsResponse {
 	battleCount: number;
-	chat: IRoomDetails[];
-	official: IRoomDetails[];
-	pspl: IRoomDetails[];
+	chat?: IRoomDetails[];
+	official?: IRoomDetails[];
+	pspl?: IRoomDetails[];
 	userCount: number;
 }
 
@@ -270,6 +290,17 @@ export interface IClientMessageTypes {
 		readonly html: string;
 	};
 	uhtmlchange: IClientMessageTypes['uhtml'];
+
+	tempnotify: {
+		readonly id: string;
+		readonly title: string;
+		readonly message: string;
+		readonly highlight: string;
+	}
+
+	tempnotifyoff: {
+		readonly id: string;
+	}
 
 	/**
 	 * Message type|(Rest)

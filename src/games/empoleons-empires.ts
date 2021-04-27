@@ -63,8 +63,8 @@ class EmpoleonsEmpires extends ScriptedGame {
 				this.timeout = setTimeout(() => {
 					if (this.currentPlayer === currentPlayer) {
 						this.say("**" + this.currentPlayer.name + "** (AKA " + this.playerAliases.get(this.currentPlayer) + ") did not " +
-							"suspect anyone and was eliminated!");
-						this.eliminatePlayer(this.currentPlayer, "You did not suspect another player!");
+							"suspect anyone and was eliminated from the game!");
+						this.eliminatePlayer(this.currentPlayer);
 						this.currentPlayer = null;
 					}
 					this.nextRound();
@@ -95,7 +95,6 @@ class EmpoleonsEmpires extends ScriptedGame {
 
 const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 	guess: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canGuess || this.players[user.id] !== this.currentPlayer) return false;
 			const player = this.players[user.id];
@@ -112,7 +111,7 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 			}
 			const attackedPlayer = this.players[id];
 			if (attackedPlayer === player) {
-				this.say("You cannot guess your own alias.");
+				this.say("You cannot use ``" + Config.commandCharacter + "guess`` on yourself.");
 				return false;
 			}
 			if (attackedPlayer.eliminated) {
@@ -136,7 +135,7 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 			let totalSuspects = this.totalSuspects.get(player) || 0;
 			if (guessedAlias === Tools.toId(this.playerAliases.get(attackedPlayer))) {
 				this.say("Correct! " + attackedPlayer.name + " has been eliminated from the game.");
-				this.eliminatePlayer(attackedPlayer, "Your alias was guessed by " + player.name + "!");
+				this.eliminatePlayer(attackedPlayer);
 				let points = this.points.get(player) || 0;
 				points++;
 				this.points.set(player, points);
@@ -154,7 +153,6 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 		aliases: ['g'],
 	},
 	alias: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.playerAliases.has(this.players[user.id])) {
 				user.say("You have already chosen your alias!");
@@ -166,6 +164,7 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 				user.say("Aliases cannot include commas.");
 				return false;
 			}
+
 			const id = Tools.toId(target);
 			if (!id || Tools.toAlphaNumeric(target).length !== target.length) {
 				user.say("Aliases can only contain alpha-numeric characters.");
@@ -175,6 +174,7 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 				user.say("Aliases must be shorter than 15 characters.");
 				return false;
 			}
+
 			const otherUser = Users.get(target);
 			if (otherUser && otherUser.rooms.has(this.room as Room)) {
 				user.say("Aliases cannot be the names of other users in the room.");
@@ -188,6 +188,7 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 				user.say("Aliases cannot contain banned words.");
 				return false;
 			}
+
 			this.playerAliases.set(player, alias);
 			this.aliasIds.push(id);
 			user.say("You have chosen **" + alias + "** as your alias!");
@@ -197,7 +198,6 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 		pmOnly: true,
 	},
 	dqalias: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!user.hasRank(this.room as Room, 'driver')) return false;
 			let targetPlayer: Player | undefined;
@@ -215,8 +215,9 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 				user.say(targetPlayer.name + " is already eliminated.");
 				return false;
 			}
+
 			this.removePlayer(targetPlayer.name);
-			this.room.sayCommand("/modnote " + user.name + " DQed " + targetPlayer.name + " from " + this.name + " for using the alias '" +
+			(this.room as Room).modnote(user.name + " DQed " + targetPlayer.name + " from " + this.name + " for using the alias '" +
 				target.trim() + "'.");
 			return true;
 		},
@@ -227,13 +228,16 @@ const commands: GameCommandDefinitions<EmpoleonsEmpires> = {
 
 export const game: IGameFile<EmpoleonsEmpires> = {
 	aliases: ["empoleons"],
+	category: 'puzzle',
 	commandDescriptions: [Config.commandCharacter + "alias [alias]", Config.commandCharacter + "guess [player], [alias]"],
 	commands,
 	class: EmpoleonsEmpires,
 	description: "Players choose aliases and await their turns to guess the aliases of other players. A player will guess until they " +
 		"are incorrect, at which point it will be the guessed player's turn.",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	formerNames: ["Empires"],
 	name: "Empoleon's Empires",
-	noOneVsOne: true,
 	mascot: "Empoleon",
 };

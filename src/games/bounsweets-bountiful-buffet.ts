@@ -87,21 +87,20 @@ class BounsweetsBountifulBuffet extends ScriptedGame {
 
 		if (this.round === 11) {
 			this.say("The buffet has ended!");
-			let maxPoints = -1;
-			let bestPlayer = null;
+			let highestPoints = 0;
 			for (const id in this.players) {
 				const player = this.players[id];
 				const points = this.points.get(player);
 				if (!points) continue;
-				if (points > maxPoints) {
-					maxPoints = points;
-					bestPlayer = player;
+				if (points > highestPoints) {
+					this.winners.clear();
+					this.winners.set(player, points);
+					highestPoints = points;
+				} else if (points === highestPoints) {
+					this.winners.set(player, points);
 				}
 			}
-			if (bestPlayer) {
-				this.winners.set(bestPlayer, 1);
-				this.addBits(bestPlayer, 500);
-			}
+
 			this.end();
 			return;
 		}
@@ -112,8 +111,8 @@ class BounsweetsBountifulBuffet extends ScriptedGame {
 		const mealNames: string[] = [];
 		this.numberOfMeals = Math.min(Math.ceil(this.playerCount / 3) + 1, this.meals.length);
 		for (let i = 0; i < this.numberOfMeals; i++) {
-			const num1 = Math.floor(Math.random() * 99) + 1;
-			const num2 = Math.floor(Math.random() * 99) + 1;
+			const num1 = this.random(99) + 1;
+			const num2 = this.random(99) + 1;
 			this.mealPoints.push(num1 + num2);
 			mealNames.push("<b>" + this.meals[i] + "</b>: " + this.mealPoints[i]);
 		}
@@ -136,13 +135,15 @@ class BounsweetsBountifulBuffet extends ScriptedGame {
 	}
 
 	onEnd(): void {
+		this.winners.forEach((points, player) => {
+			this.addBits(player, 500);
+		});
 		this.announceWinners();
 	}
 }
 
 const commands: GameCommandDefinitions<BounsweetsBountifulBuffet> = {
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (this.selectedMeals.has(this.players[user.id])) return false;
 			const player = this.players[user.id];
@@ -164,35 +165,33 @@ const commands: GameCommandDefinitions<BounsweetsBountifulBuffet> = {
 			player.say("You have chosen **" + this.meals[index] + "**!");
 			return true;
 		},
-		pmGameCommand: true,
+		pmOnly: true,
 	},
 };
 
 const tests: GameFileTests<BounsweetsBountifulBuffet> = {
 	'should give the same points for shared meals': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 2);
 			game.minPlayers = 2;
 			game.start();
 			assertStrictEqual(game.numberOfMeals, 2);
 			const expectedPoints = Math.floor(game.mealPoints[0] / 2);
-			runCommand('select', game.meals[0], game.room, players[0].name);
-			runCommand('select', game.meals[0], game.room, players[1].name);
+			runCommand('select', game.meals[0], Users.get(players[0].name)!, players[0].name);
+			runCommand('select', game.meals[0], Users.get(players[1].name)!, players[1].name);
 			assertStrictEqual(game.points.get(players[0]), expectedPoints);
 			assertStrictEqual(game.points.get(players[1]), expectedPoints);
 		},
 	},
 	'should give different points for separate meals': {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		test(game): void {
 			const players = addPlayers(game, 2);
 			game.minPlayers = 2;
 			game.start();
 			const expectedPointsA = game.mealPoints[0];
 			const expectedPointsB = game.mealPoints[1];
-			runCommand('select', game.meals[0], game.room, players[0].name);
-			runCommand('select', game.meals[1], game.room, players[1].name);
+			runCommand('select', game.meals[0], Users.get(players[0].name)!, players[0].name);
+			runCommand('select', game.meals[1], Users.get(players[1].name)!, players[1].name);
 			assertStrictEqual(game.points.get(players[0]), expectedPointsA);
 			assertStrictEqual(game.points.get(players[1]), expectedPointsB);
 		},
@@ -201,6 +200,7 @@ const tests: GameFileTests<BounsweetsBountifulBuffet> = {
 
 export const game: IGameFile<BounsweetsBountifulBuffet> = {
 	aliases: ['bounsweets', 'bbb'],
+	category: 'luck',
 	class: BounsweetsBountifulBuffet,
 	commandDescriptions: [Config.commandCharacter + "select [meal]"],
 	commands,
@@ -208,6 +208,8 @@ export const game: IGameFile<BounsweetsBountifulBuffet> = {
 	formerNames: ["Buneary's Bountiful Buffet"],
 	name: "Bounsweet's Bountiful Buffet",
 	mascot: "Bounsweet",
-	noOneVsOne: true,
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	tests,
 };

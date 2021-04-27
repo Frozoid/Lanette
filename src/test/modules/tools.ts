@@ -1,3 +1,4 @@
+import type { NamedHexCode } from "../../types/tools";
 import { assert, assertStrictEqual } from "../test-tools";
 
 /* eslint-env mocha */
@@ -13,6 +14,17 @@ describe("Tools", () => {
 	it('should export the correct constant values', () => {
 		assertStrictEqual(Tools.mainServer, "play.pokemonshowdown.com");
 		assertStrictEqual(Tools.letters, "abcdefghijklmnopqrstuvwxyz");
+	});
+	it('should return proper values from stripHtmlCharacters()', () => {
+		const testString = "test";
+		const left = testString.substr(0, 2);
+		const right = testString.substr(2);
+		assertStrictEqual(Tools.stripHtmlCharacters("< " + left + "<" + right + " <"), testString);
+		assertStrictEqual(Tools.stripHtmlCharacters("> " + left + ">" + right + " >"), testString);
+		assertStrictEqual(Tools.stripHtmlCharacters("/ " + left + "/" + right + " /"), testString);
+		assertStrictEqual(Tools.stripHtmlCharacters("\\ " + left + "\\" + right + " \\"), testString);
+		assertStrictEqual(Tools.stripHtmlCharacters("' " + left + "'" + right + " '"), testString);
+		assertStrictEqual(Tools.stripHtmlCharacters('" ' + left + '"' + right + ' "'), testString);
 	});
 	it('should return proper values from deepClone()', () => {
 		const array = ['a'];
@@ -114,6 +126,10 @@ describe("Tools", () => {
 		assertStrictEqual(Tools.toDurationString(2 * year), '2 years');
 		assertStrictEqual(Tools.toDurationString(minute + second), '1 minute and 1 second');
 		assertStrictEqual(Tools.toDurationString(hour + minute + second), '1 hour, 1 minute, and 1 second');
+		assertStrictEqual(Tools.toDurationString(1), '');
+		assertStrictEqual(Tools.toDurationString(1, {milliseconds: true}), '1 millisecond');
+		assertStrictEqual(Tools.toDurationString(2, {milliseconds: true}), '2 milliseconds');
+		assertStrictEqual(Tools.toDurationString(second + 1, {milliseconds: true}), '1 second and 1 millisecond');
 	});
 	it('should return proper values from deepSortArray()', () => {
 		assertStrictEqual(Tools.deepSortArray(['c', 'a', 'b']).join(''), 'abc');
@@ -196,13 +212,22 @@ describe("Tools", () => {
 			assertStrictEqual(Tools.getChallongeUrl(" " + link + "\\"), expectedLink);
 		}
 	});
-	it('should have proper typeHexColors and pokemonColorHexColors lists', () => {
-		for (const i in Tools.typeHexCodes) {
-			assert(Tools.typeHexCodes[i] in Tools.hexCodes, i);
+	it('should have proper hex code lists', () => {
+		for (const i in Tools.eggGroupHexCodes) {
+			assert(Tools.eggGroupHexCodes[i] in Tools.hexCodes, i);
+		}
+
+		const namedHexCodes = Object.keys(Tools.namedHexCodes) as NamedHexCode[];
+		for (const name of namedHexCodes) {
+			assert(Tools.namedHexCodes[name] in Tools.hexCodes, name);
 		}
 
 		for (const i in Tools.pokemonColorHexCodes) {
 			assert(Tools.pokemonColorHexCodes[i] in Tools.hexCodes, i);
+		}
+
+		for (const i in Tools.typeHexCodes) {
+			assert(Tools.typeHexCodes[i] in Tools.hexCodes, i);
 		}
 	});
 	it('should properly generate permutations', () => {

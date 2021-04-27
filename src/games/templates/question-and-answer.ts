@@ -3,8 +3,7 @@ import { ScriptedGame } from '../../room-game-scripted';
 import type { Room } from '../../rooms';
 import { assert, assertStrictEqual, getBasePlayerName, runCommand } from '../../test/test-tools';
 import type {
-	GameCommandDefinitions, GameCommandReturnType, GameFileTests, IGameAchievement, IGameFormat, IGameTemplateFile,
-	IRandomGameAnswer
+	GameCommandDefinitions, GameCommandReturnType, GameFileTests, IGameAchievement, IGameFormat, IGameTemplateFile, IRandomGameAnswer
 } from '../../types/games';
 
 export abstract class QuestionAndAnswer extends ScriptedGame {
@@ -38,6 +37,7 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 	allAnswersAchievement?: IGameAchievement;
 	allAnswersTeamAchievement?: IGameAchievement;
 	answerCommands?: string[];
+	oneGuessPerHint?: boolean;
 	noIncorrectAnswersMinigameAchievement?: IGameAchievement;
 	roundCategory?: string;
 	readonly roundGuesses?: Map<Player, boolean>;
@@ -88,7 +88,7 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 			}
 		}
 
-		if (!this.correctPlayers.length) {
+		if (!this.correctPlayers.length && !this.format.mode) {
 			this.inactiveRounds++;
 			if (this.inactiveRounds === this.inactiveRoundLimit) {
 				this.inactivityEnd();
@@ -188,6 +188,7 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 					}
 				}
 				if (this.onHintHtml) this.onHintHtml();
+				if (this.parentGame && this.parentGame.onChildHint) this.parentGame.onChildHint(this.hint, this.answers, newAnswer);
 			};
 
 			if (!newAnswer && this.previousHint && this.previousHint === this.hint) {
@@ -242,9 +243,18 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 
 		if (!answer) {
 			this.incorrectAnswers++;
-			if (!this.onIncorrectGuess) return false;
-			answer = this.onIncorrectGuess(player, guess);
-			if (!answer) return false;
+			if (this.onIncorrectGuess) answer = this.onIncorrectGuess(player, guess);
+			if (!answer) {
+				if (this.oneGuessPerHint && this.roundGuesses && this.inheritedPlayers && this.roundGuesses.size === this.playerCount) {
+					this.say("All players have used up their guess!");
+					this.displayAnswers();
+					this.answers = [];
+					if (this.answerTimeout) clearTimeout(this.answerTimeout);
+					if (this.timeout) clearTimeout(this.timeout);
+					this.timeout = setTimeout(() => this.nextRound(), 5000);
+				}
+				return false;
+			}
 		}
 
 		if (this.maxCorrectPlayersPerRound === 1) {
@@ -295,7 +305,7 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 		// formats with async generateAnswer should not have canGetRandomAnswer set to `true`
 		void this.generateAnswer();
 		if (this.updateHint) this.updateHint();
-		return {answers: this.answers, hint: this.hint};
+		return {answers: this.getAnswers(), hint: this.hint};
 	}
 
 	onForceEnd(): void {
@@ -333,6 +343,18 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 		this.announceWinners();
 	}
 
+	botChallengeTurn(botPlayer: Player, newAnswer: boolean): void {
+		if (!newAnswer) return;
+
+		if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
+		this.botTurnTimeout = setTimeout(() => {
+			const command = this.answerCommands ? this.answerCommands[0] : "g";
+			const answer = this.sampleOne(this.answers).toLowerCase();
+			this.say(Config.commandCharacter + command + " " + answer);
+			botPlayer.useCommand(command, answer);
+		}, this.sampleOne(this.botChallengeSpeeds!));
+	}
+
 	beforeNextRound?(): boolean | string;
 	filterGuess?(guess: string, player?: Player): boolean;
 	getPointsForAnswer?(answer: string, timestamp: number): number;
@@ -344,7 +366,6 @@ export abstract class QuestionAndAnswer extends ScriptedGame {
 
 const commands: GameCommandDefinitions<QuestionAndAnswer> = {
 	guess: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user, cmd, timestamp): GameCommandReturnType {
 			if (this.answerCommands && !this.answerCommands.includes(cmd)) return false;
 
@@ -354,12 +375,13 @@ const commands: GameCommandDefinitions<QuestionAndAnswer> = {
 			const answer = this.guessAnswer(player, target);
 			if (!answer || !this.canGuessAnswer(player)) return false;
 
+			if (this.botTurnTimeout) clearTimeout(this.botTurnTimeout);
 			if (this.timeout) clearTimeout(this.timeout);
 
 			if (this.isMiniGame) {
 				this.say((this.pm ? "You are" : "**" + user.name + "** is") + " correct!");
 				this.displayAnswers(answer);
-				this.addBits(user, Games.minigameBits);
+				this.addBits(user, Games.getMinigameBits());
 				if (this.noIncorrectAnswersMinigameAchievement && !this.incorrectAnswers) {
 					this.unlockAchievement(player, this.noIncorrectAnswersMinigameAchievement);
 				}
@@ -431,7 +453,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -454,7 +475,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -477,7 +497,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -498,7 +517,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -514,7 +532,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -530,7 +547,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game): Promise<void> {
 			this.timeout(15000);
 
@@ -558,7 +574,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game, format): Promise<void> {
 			if (!format.minigameCommand) return;
 			this.timeout(15000);
@@ -581,7 +596,6 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 		config: {
 			async: true,
 		},
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		async test(game, format): Promise<void> {
 			if (!format.minigameCommand) return;
 			this.timeout(15000);
@@ -608,6 +622,10 @@ const tests: GameFileTests<QuestionAndAnswer> = {
 };
 
 export const game: IGameTemplateFile<QuestionAndAnswer> = {
+	botChallenge: {
+		enabled: true,
+		options: ['speed'],
+	},
 	canGetRandomAnswer: true,
 	commandDescriptions: [Config.commandCharacter + 'g [answer]'],
 	commands,

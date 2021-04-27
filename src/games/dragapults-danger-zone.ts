@@ -16,6 +16,8 @@ const mapSymbols: {player: string; empty: string} = {
 	empty: "O",
 };
 
+const MAX_REMATCHES = 2;
+
 class DragapultsDangerZone extends ScriptedGame {
 	canFire: boolean = false;
 	canHide: boolean = false;
@@ -27,20 +29,20 @@ class DragapultsDangerZone extends ScriptedGame {
 	lastFiredLocation: string = '';
 	matchupPlayers: Player[] = [];
 	matchupsWon = new Map<Player, number>();
+	maxPlayers = 20;
 	minPlayers = 4;
 	playerLocations = new Map<Player, string>();
 	playerOrders: Dict<Player[]> = {};
+	rematchCount: number = 0;
 	revealedLocations: string[] = [];
 	selectedMatchupPokemon = new Map<Player, IPokemon>();
 	soloPlayerOrder: Player[] = [];
 	soloRound: number = 0;
 	teamBased: boolean = true;
 	teamColumnLetters = new Map<PlayerTeam, string[]>();
+	teamOrder: [TeamIds, TeamIds] = ['red', 'blue'];
 	teamRound: number = 0;
 	teams: Dict<PlayerTeam> | null = null;
-
-	// set in onStart()
-	largestTeam!: PlayerTeam;
 
 	static loadData(): void {
 		data.pokemon = Games.getPokemonList().map(x => x.name);
@@ -182,7 +184,12 @@ class DragapultsDangerZone extends ScriptedGame {
 		}
 
 		this.setLargestTeam();
-		this.currentTeam = this.largestTeam.id as TeamIds;
+		for (const i in this.teams) {
+			if (this.teams[i] === this.largestTeam) continue;
+			this.teamOrder = [this.teams[i].id as TeamIds, this.largestTeam!.id as TeamIds];
+		}
+		this.currentTeam = this.teamOrder[0];
+
 		this.nextRound();
 	}
 
@@ -190,8 +197,8 @@ class DragapultsDangerZone extends ScriptedGame {
 		if (this.currentPlayer) {
 			if (!this.currentPlayer.eliminated) {
 				this.addRevealedLocation(this.playerLocations.get(this.currentPlayer)!);
-				this.say(this.currentPlayer.name + " did not fire anywhere!");
-				this.eliminatePlayer(this.currentPlayer, "You did not fire anywhere on the map!");
+				this.say(this.currentPlayer.name + " did not fire anywhere and has been eliminated from the game!");
+				this.eliminatePlayer(this.currentPlayer);
 			}
 			this.currentPlayer = null;
 		}
@@ -202,8 +209,8 @@ class DragapultsDangerZone extends ScriptedGame {
 				return this.end();
 			}
 
-			if (this.currentTeam === this.largestTeam.id && (!(this.largestTeam.id in this.playerOrders) ||
-				!this.playerOrders[this.largestTeam.id].length)) {
+			if (this.currentTeam === this.teamOrder[0] && (!(this.teams![this.currentTeam].id in this.playerOrders) ||
+				!this.playerOrders[this.teams![this.currentTeam].id].length)) {
 				this.setTeamPlayerOrders();
 
 				this.teamRound++;
@@ -220,13 +227,13 @@ class DragapultsDangerZone extends ScriptedGame {
 			let player = this.playerOrders[team.id].shift();
 			if (!player) {
 				this.setTeamPlayerOrder(team);
-				player = this.playerOrders[team.id].shift()!;
+				player = this.playerOrders[team.id].shift();
 			}
 
-			this.currentTeam = this.currentTeam === 'red' ? 'blue' : 'red';
-			this.currentPlayer = player;
+			this.currentPlayer = player!;
+			fireText = "It is " + player!.name + " of the " + team.name + " Team's turn to fire!";
 
-			fireText = "It is " + player.name + " of the " + team.name + " Team's turn to fire!";
+			this.currentTeam = this.currentTeam === 'red' ? 'blue' : 'red';
 		} else {
 			if (this.getFinalPlayer()) {
 				return this.end();
@@ -277,6 +284,15 @@ class DragapultsDangerZone extends ScriptedGame {
 
 					this.addBits(player, earnings);
 				}
+
+				const losingTeam = this.teams![winningTeam.id === 'blue' ? 'red' : 'blue'];
+				for (const player of losingTeam.players) {
+					if (!this.playerLocations.has(player)) continue;
+					const matchupsWon = this.matchupsWon.get(player);
+					if (matchupsWon) {
+						this.addBits(player, matchupsWon * 50);
+					}
+				}
 			}
 		} else {
 			const winner = this.getFinalPlayer();
@@ -314,11 +330,11 @@ class DragapultsDangerZone extends ScriptedGame {
 		if (this.timeout) clearTimeout(this.timeout);
 		this.canSelect = false;
 
-		const playerA = this.matchupPlayers[0];
-		const playerB = this.matchupPlayers[1];
-		const playerAPokemon = this.selectedMatchupPokemon.get(playerA);
-		const playerBPokemon = this.selectedMatchupPokemon.get(playerB);
-		if (!playerAPokemon && !playerBPokemon) {
+		const attacker = this.matchupPlayers[0];
+		const defender = this.matchupPlayers[1];
+		const attackerPokemon = this.selectedMatchupPokemon.get(attacker);
+		const defenderPokemon = this.selectedMatchupPokemon.get(defender);
+		if (!attackerPokemon && !defenderPokemon) {
 			const text = "Neither player selected a Pokemon!";
 			this.on(text, () => {
 				this.currentPlayer = null;
@@ -328,39 +344,51 @@ class DragapultsDangerZone extends ScriptedGame {
 			return;
 		}
 
-		let playerAWin = false;
-		let playerBWin = false;
-		if (playerAPokemon && playerBPokemon) {
-			const winner = Games.getMatchupWinner(playerAPokemon, playerBPokemon);
-			if (winner === playerAPokemon) {
-				playerAWin = true;
-			} else if (winner === playerBPokemon) {
-				playerBWin = true;
+		let attackerWin = false;
+		let defenderWin = false;
+		if (attackerPokemon && defenderPokemon) {
+			const winner = Games.getMatchupWinner(attackerPokemon, defenderPokemon);
+			if (winner === attackerPokemon) {
+				attackerWin = true;
+			} else if (winner === defenderPokemon) {
+				defenderWin = true;
 			}
 		} else {
-			if (playerAPokemon) {
-				playerAWin = true;
-			} else if (playerBPokemon) {
-				playerBWin = true;
+			if (attackerPokemon) {
+				attackerWin = true;
+			} else if (defenderPokemon) {
+				defenderWin = true;
 			}
 		}
 
+		let tie = false;
 		let text = '';
-		if (playerAWin) {
-			text = this.handleMatchupResult(playerA, playerB, playerAPokemon!, playerBPokemon);
-		} else if (playerBWin) {
-			text = this.handleMatchupResult(playerB, playerA, playerBPokemon!, playerAPokemon);
+		if (!attackerWin && !defenderWin) {
+			tie = true;
+			text = "It was a tie between " + attacker.name + "'s " + attackerPokemon!.name + " and " +
+				defender.name + "'s " + defenderPokemon!.name + "!";
 		} else {
-			text = "It was a tie between " + playerA.name + "'s " + playerAPokemon!.name + " and " +
-				playerB.name + "'s " + playerBPokemon!.name + "!";
+			if (attackerWin) {
+				text = this.handleMatchupResult(attacker, defender, attackerPokemon!, defenderPokemon);
+			} else if (defenderWin) {
+				text = this.handleMatchupResult(defender, attacker, defenderPokemon!, attackerPokemon);
+			}
 		}
 
-		this.currentPlayer = null;
-		if (this.teamBased && (playerAWin || playerBWin)) this.setLargestTeam();
+		if (tie && this.rematchCount < MAX_REMATCHES) {
+			this.rematchCount++;
+			this.on(text, () => {
+				this.timeout = setTimeout(() => this.startMatchup(this.matchupPlayers), 3 * 1000);
+			});
+		} else {
+			if (this.rematchCount) this.rematchCount = 0;
+			this.currentPlayer = null;
 
-		this.on(text, () => {
-			this.timeout = setTimeout(() => this.nextRound(), 3 * 1000);
-		});
+			this.on(text, () => {
+				this.timeout = setTimeout(() => this.nextRound(), 3 * 1000);
+			});
+		}
+
 		this.say(text);
 	}
 
@@ -377,8 +405,9 @@ class DragapultsDangerZone extends ScriptedGame {
 	}
 
 	handleMatchupResult(winner: Player, loser: Player, winnerPokemon: IPokemon, loserPokemon?: IPokemon): string {
-		if (!loserPokemon || loser !== this.currentPlayer) {
-			this.eliminatePlayer(loser, loserPokemon ? "You were defeated by " + winner.name + "!" : "You did not select a Pokemon!");
+		const loserEliminated = !loserPokemon || loser !== this.currentPlayer;
+		if (loserEliminated) {
+			this.eliminatePlayer(loser);
 			this.addRevealedLocation(this.playerLocations.get(loser)!);
 		}
 
@@ -388,7 +417,8 @@ class DragapultsDangerZone extends ScriptedGame {
 		this.matchupsWon.set(winner, matchupsWon + 1);
 
 		if (loserPokemon) {
-			return loser.name + "'s " + loserPokemon.name + " was defeated by " + winner.name + "'s " + winnerPokemon.name + "!";
+			return loser.name + "'s " + loserPokemon.name + " was defeated by " + winner.name + "'s " + winnerPokemon.name + "!" +
+				(loserEliminated ? " " + loser.name + " has been eliminated from the game!" : "");
 		} else {
 			return loser.name + " did not select a Pokemon and was eliminated from the game!";
 		}
@@ -459,7 +489,6 @@ class DragapultsDangerZone extends ScriptedGame {
 
 const commands: GameCommandDefinitions<DragapultsDangerZone> = {
 	hide: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canHide) return false;
 
@@ -493,7 +522,6 @@ const commands: GameCommandDefinitions<DragapultsDangerZone> = {
 		pmOnly: true,
 	},
 	fire: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canFire || this.players[user.id] !== this.currentPlayer) return false;
 
@@ -527,7 +555,6 @@ const commands: GameCommandDefinitions<DragapultsDangerZone> = {
 		},
 	},
 	select: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canSelect || !this.matchupPlayers.includes(this.players[user.id]) ||
 				this.selectedMatchupPokemon.has(this.players[user.id])) {
@@ -558,15 +585,17 @@ const commands: GameCommandDefinitions<DragapultsDangerZone> = {
 
 export const game: IGameFile<DragapultsDangerZone> = {
 	aliases: ["dragapults", "ddz", "dangerzone"],
-	category: 'strategy',
+	category: 'luck',
 	commandDescriptions: [Config.commandCharacter + "hide [location]", Config.commandCharacter + "fire [location]",
 		Config.commandCharacter + "select [Pokemon]"],
 	commands,
 	class: DragapultsDangerZone,
 	description: "Players are split into teams and attempt to sink the opposing players by firing Dreepy around the grid!",
+	disallowedChallenges: {
+		onevsone: true,
+	},
 	name: "Dragapult's Danger Zone",
 	mascot: "Dragapult",
-	noOneVsOne: true,
 	scriptedOnly: true,
 	variants: [
 		{
@@ -575,7 +604,9 @@ export const game: IGameFile<DragapultsDangerZone> = {
 			aliases: ['dsdz'],
 			variantAliases: ['solo'],
 			commandDescriptions: [Config.commandCharacter + "fire [location]", Config.commandCharacter + "select [Pokemon]"],
-			noOneVsOne: false,
+			disallowedChallenges: {
+				onevsone: false,
+			},
 			teamBased: false,
 		},
 	],

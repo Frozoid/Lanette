@@ -1,7 +1,7 @@
 import type { Player } from "../../room-activity";
 import { addPlayers, assertStrictEqual } from "../../test/test-tools";
 import type {
-	GameCategory, GameCommandDefinitions, GameFileTests, IGameAchievement, IGameTemplateFile
+	GameCommandDefinitions, GameFileTests, IGameAchievement, IGameTemplateFile
 } from "../../types/games";
 import type { NamedHexCode } from "../../types/tools";
 import type { BoardActionCard, BoardSide, IBoard, IMovedBoardLocation } from "./board";
@@ -267,7 +267,7 @@ export abstract class BoardPropertyGame<BoardSpaces = Dict<BoardSpace>> extends 
 		this.properties.set(player, []);
 	}
 
-	onEliminatePlayer(player: Player, eliminationCause?: string | null, eliminator?: Player | null): void {
+	onEliminatePlayer(player: Player, eliminator?: Player | null): void {
 		const properties = this.properties.get(player) || [];
 		const eliminatorProperties = eliminator ? this.properties.get(eliminator)! : [];
 		for (const property of properties) {
@@ -353,7 +353,7 @@ export abstract class BoardPropertyGame<BoardSpaces = Dict<BoardSpace>> extends 
 					this.say(text);
 				} else {
 					const text = "It is **" + player.name + "**'s 4th turn in " + this.jailSpace.name + ", but they do not have enough " +
-						this.currencyPluralName + " to escape!";
+						this.currencyPluralName + " to escape and have been eliminated from the game!";
 					this.on(text, () => {
 						this.eliminatePlayer(player);
 						this.timeout = setTimeout(() => this.nextRound(), this.roundTime);
@@ -548,16 +548,16 @@ export abstract class BoardPropertyGame<BoardSpaces = Dict<BoardSpace>> extends 
 		let reachedMaxCurrency = false;
 		if (space instanceof BoardPropertyRentSpace && space.owner) {
 			owner = space.owner;
-			ownerCurrency = this.playerCurrency.get(owner)!;
-			ownerCurrency += payment;
-			this.playerCurrency.set(owner, ownerCurrency);
-			if (this.maxCurrency && ownerCurrency >= this.maxCurrency) reachedMaxCurrency = true;
+			ownerCurrency = this.playerCurrency.get(owner);
+			ownerCurrency! += payment;
+			this.playerCurrency.set(owner, ownerCurrency!);
+			if (this.maxCurrency && ownerCurrency! >= this.maxCurrency) reachedMaxCurrency = true;
 		}
 
 		let text: string;
 		if (eliminated) {
-			text = "They only have " + currency + " " + (currency > 1 ? this.currencyPluralName : this.currencyName) + " and cannot pay " +
-				"the full rent!";
+			text = "They only have " + currency + " " + (currency > 1 ? this.currencyPluralName : this.currencyName) + " and have been " +
+				"eliminated from the game!";
 			this.on(text, () => {
 				if (reachedMaxCurrency) {
 					this.onMaxCurrency(owner!);
@@ -682,7 +682,6 @@ export abstract class BoardPropertyGame<BoardSpaces = Dict<BoardSpace>> extends 
 
 const commands: GameCommandDefinitions<BoardPropertyGame> = {
 	rolldice: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canRollOrEscapeJail || this.players[user.id] !== this.currentPlayer) return false;
 			if (this.timeout) clearTimeout(this.timeout);
@@ -692,7 +691,6 @@ const commands: GameCommandDefinitions<BoardPropertyGame> = {
 		},
 	},
 	unlock: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.propertyToAcquire || !this.canAcquire || this.players[user.id] !== this.currentPlayer) return false;
 			this.acquirePropertySpace(this.propertyToAcquire, this.currentPlayer, this.propertyToAcquire.cost);
@@ -708,7 +706,6 @@ const commands: GameCommandDefinitions<BoardPropertyGame> = {
 		aliases: ['buy'],
 	},
 	pass: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.propertyToAcquire || !this.canAcquire || this.players[user.id] !== this.currentPlayer) return false;
 			this.canAcquire = false;
@@ -718,7 +715,6 @@ const commands: GameCommandDefinitions<BoardPropertyGame> = {
 		},
 	},
 	escape: {
-		// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 		command(target, room, user) {
 			if (!this.canRollOrEscapeJail || this.players[user.id] !== this.currentPlayer) return false;
 			if (this.timeout) clearTimeout(this.timeout);
@@ -763,7 +759,6 @@ const tests: GameFileTests<BoardPropertyGame> = {
 };
 
 export const game: IGameTemplateFile<BoardPropertyGame> = Object.assign(Tools.deepClone(boardGame), {
-	category: 'luck' as GameCategory,
 	commands,
 	modeProperties: undefined,
 	tests: Object.assign({}, boardGame.tests, tests),
